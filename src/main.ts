@@ -4,6 +4,7 @@ import { createEnemySystem } from './enemies';
 import { createIsland } from './island';
 import { PlayerController } from './player';
 import { createTargets } from './targets';
+import { TouchControls } from './touchControls';
 import { WeaponSystem } from './weapon';
 
 function requireEl<T extends HTMLElement>(id: string): T {
@@ -15,6 +16,7 @@ function requireEl<T extends HTMLElement>(id: string): T {
 const canvasContainer = requireEl<HTMLDivElement>('canvas-container');
 const damageVignetteEl = requireEl<HTMLDivElement>('damage-vignette');
 const overlayEl = requireEl<HTMLDivElement>('overlay');
+const touchModeBtn = requireEl<HTMLButtonElement>('touch-mode-btn');
 const playBtn = requireEl<HTMLButtonElement>('play-btn');
 const gameoverOverlayEl = requireEl<HTMLDivElement>('gameover-overlay');
 const gameoverWaveEl = requireEl<HTMLSpanElement>('gameover-wave');
@@ -81,6 +83,52 @@ let resetScheduled = false;
 let resetCountdown = 0;
 let toastTimer = 0;
 let gameOverShown = false;
+let touchModeEnabled = TouchControls.isTouchDevice();
+let touchModeManuallyToggled = false;
+let touchAdsActive = false;
+
+const touchControls = new TouchControls({
+  onMove: (forward, strafe, sprint) => {
+    player.setTouchMove(forward, strafe, sprint);
+  },
+  onLook: (dx, dy) => {
+    if (!isPlaying) return;
+    const looked = player.handleTouchLook(dx, dy, weapon.getState().isAiming);
+    weapon.addMouseSway(looked.dx, looked.dy);
+  },
+  onFireChange: (firing) => {
+    if (!isPlaying) return;
+    weapon.setFiringHeld(firing);
+  },
+  onAdsToggle: () => {
+    if (!isPlaying) return;
+    touchAdsActive = !touchAdsActive;
+    weapon.setAiming(touchAdsActive);
+    touchControls.setAdsActive(touchAdsActive);
+  },
+  onJump: () => {
+    if (!isPlaying) return;
+    player.triggerJump();
+  },
+  onReload: () => {
+    if (!isPlaying) return;
+    weapon.startReload();
+  },
+  onPause: () => {
+    pauseGame();
+  },
+});
+
+function syncTouchModeUi(): void {
+  document.body.classList.toggle('touch-active', touchModeEnabled);
+  touchModeBtn.textContent = touchModeEnabled
+    ? 'Controles Touch: ATIVADO'
+    : 'Controles Touch: DESATIVADO';
+  touchModeBtn.classList.toggle('active', touchModeEnabled);
+  touchControls.setVisible(isPlaying && touchModeEnabled);
+}
+
+syncTouchModeUi();
 
 function showToast(message: string, duration = 2.4): void {
   toastEl.textContent = message;
@@ -108,14 +156,35 @@ function setOverlayVisible(visible: boolean): void {
   }
 }
 
+function pauseGame(): void {
+  if (!isPlaying && !gameOverShown) return;
+  isPlaying = false;
+  pointerLockFallback = false;
+  touchAdsActive = false;
+  player.clearInputs();
+  weapon.setFiringHeld(false);
+  weapon.setAiming(false);
+  touchControls.setVisible(false);
+  touchControls.setAdsActive(false);
+  if (document.pointerLockElement === renderer.domElement) {
+    document.exitPointerLock?.();
+  }
+  if (!gameOverShown) {
+    setOverlayVisible(true);
+  }
+}
+
 function showGameOver(): void {
   if (gameOverShown) return;
   gameOverShown = true;
   isPlaying = false;
   pointerLockFallback = false;
+  touchAdsActive = false;
   player.clearInputs();
   weapon.setFiringHeld(false);
   weapon.setAiming(false);
+  touchControls.setVisible(false);
+  touchControls.setAdsActive(false);
   setOverlayVisible(false);
 
   if (document.pointerLockElement === renderer.domElement) {
@@ -130,18 +199,29 @@ function showGameOver(): void {
 
 function activateFallbackPlay(): void {
   attemptingPointerLock = false;
-  if (gameOverShown || document.pointerLockElement === renderer.domElement) return;
-  pointerLockFallback = true;
+  if (gameOverShown || (!touchModeEnabled && document.pointerLockElement === renderer.domElement)) return;
+  pointerLockFallback = !touchModeEnabled;
   isPlaying = true;
   hasStarted = true;
   lastPointerX = null;
   lastPointerY = null;
   setOverlayVisible(false);
+  touchControls.setVisible(touchModeEnabled);
 }
 
 function enterGame(): void {
   if (gameOverShown) return;
   audio.unlock();
+  if (touchModeEnabled) {
+    isPlaying = true;
+    hasStarted = true;
+    pointerLockFallback = false;
+    touchAdsActive = false;
+    setOverlayVisible(false);
+    touchControls.setVisible(true);
+    return;
+  }
+
   const canvas = renderer.domElement;
   attemptingPointerLock = true;
   activateFallbackPlay();
@@ -159,6 +239,7 @@ function enterGame(): void {
 
 function restartGame(): void {
   gameOverShown = false;
+  touchAdsActive = false;
   gameoverOverlayEl.classList.remove('visible');
   resetScheduled = false;
   resetCountdown = 0;
@@ -168,8 +249,26 @@ function restartGame(): void {
   weapon.reset();
   enemies.reset();
   targets.resetAll();
+  touchControls.reset();
   enterGame();
 }
+
+touchModeBtn.addEventListener('click', () => {
+  touchModeEnabled = !touchModeEnabled;
+  touchModeManuallyToggled = true;
+  syncTouchModeUi();
+});
+
+window.addEventListener(
+  'touchstart',
+  () => {
+    if (!touchModeManuallyToggled && !touchModeEnabled) {
+      touchModeEnabled = true;
+      syncTouchModeUi();
+    }
+  },
+  { passive: true }
+);
 
 playBtn.addEventListener('click', () => {
   enterGame();
@@ -209,7 +308,7 @@ document.addEventListener('pointerlockerror', () => {
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!isPlaying) return;
+  if (!isPlaying || touchModeEnabled) return;
   let moveX = e.movementX;
   let moveY = e.movementY;
   if (document.pointerLockElement !== renderer.domElement) {
@@ -225,7 +324,7 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
-  if (!isPlaying) return;
+  if (!isPlaying || touchModeEnabled) return;
   if (e.button === 0) {
     weapon.setFiringHeld(true);
   } else if (e.button === 2) {
@@ -234,6 +333,7 @@ window.addEventListener('mousedown', (e) => {
 });
 
 window.addEventListener('mouseup', (e) => {
+  if (touchModeEnabled) return;
   if (e.button === 0) {
     weapon.setFiringHeld(false);
   } else if (e.button === 2) {
@@ -247,13 +347,8 @@ window.addEventListener('contextmenu', (e) => {
 
 window.addEventListener('keydown', (e) => {
   if (!isPlaying) return;
-  if (e.code === 'Escape' && pointerLockFallback) {
-    isPlaying = false;
-    pointerLockFallback = false;
-    player.clearInputs();
-    weapon.setFiringHeld(false);
-    weapon.setAiming(false);
-    setOverlayVisible(true);
+  if (e.code === 'Escape' && (pointerLockFallback || touchModeEnabled)) {
+    pauseGame();
     return;
   }
   player.handleKeyDown(e.code);
@@ -272,9 +367,11 @@ window.addEventListener('keyup', (e) => {
 });
 
 window.addEventListener('blur', () => {
+  touchAdsActive = false;
   player.clearInputs();
   weapon.setFiringHeld(false);
   weapon.setAiming(false);
+  touchControls.reset();
 });
 
 window.addEventListener('resize', () => {
@@ -329,6 +426,7 @@ function updateHud(
   crosshairEl.classList.toggle('aiming', isAiming);
   crosshairEl.classList.toggle('reloading', isReloading);
   crosshairEl.classList.toggle('spread', spreadFlashTimer > 0 || speedRatio > 0.75);
+  touchControls.setAdsActive(isAiming);
 
   if (isReloading) {
     statusIndicatorEl.textContent = 'RECARREGANDO...';

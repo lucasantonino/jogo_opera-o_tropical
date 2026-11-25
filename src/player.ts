@@ -51,6 +51,10 @@ export class PlayerController {
   private yaw = 0;
   private pitch = -0.05;
   private readonly keys = new Set<string>();
+  private touchForward = 0;
+  private touchStrafe = 0;
+  private touchSprint = false;
+  private jumpQueued = false;
   private stepDistance = 0;
 
   private readonly forward = new THREE.Vector3();
@@ -82,6 +86,20 @@ export class PlayerController {
 
   clearInputs(): void {
     this.keys.clear();
+    this.touchForward = 0;
+    this.touchStrafe = 0;
+    this.touchSprint = false;
+    this.jumpQueued = false;
+  }
+
+  setTouchMove(forward: number, strafe: number, sprint: boolean): void {
+    this.touchForward = THREE.MathUtils.clamp(forward, -1, 1);
+    this.touchStrafe = THREE.MathUtils.clamp(strafe, -1, 1);
+    this.touchSprint = sprint;
+  }
+
+  triggerJump(): void {
+    this.jumpQueued = true;
   }
 
   handleMouseLook(movementX: number, movementY: number, isAiming: boolean): { dx: number; dy: number } {
@@ -95,6 +113,18 @@ export class PlayerController {
     this.pitch = THREE.MathUtils.clamp(this.pitch - movementY * sensitivity, -1.48, 1.48);
     this.syncCamera();
     return { dx: movementX, dy: movementY };
+  }
+
+  handleTouchLook(deltaX: number, deltaY: number, isAiming: boolean): { dx: number; dy: number } {
+    if (Math.abs(deltaX) > 400 || Math.abs(deltaY) > 400) {
+      return { dx: 0, dy: 0 };
+    }
+
+    const sensitivity = isAiming ? 0.0032 : 0.0052;
+    this.yaw -= deltaX * sensitivity;
+    this.pitch = THREE.MathUtils.clamp(this.pitch - deltaY * sensitivity, -1.48, 1.48);
+    this.syncCamera();
+    return { dx: deltaX, dy: deltaY };
   }
 
   applyRecoilKick(pitchDelta: number, yawDelta: number): void {
@@ -194,13 +224,16 @@ export class PlayerController {
       return { speedRatio: 0, isSprinting: false, isGrounded: this.isGrounded, inWater, surface };
     }
 
-    // Read movement input
-    let inputForward = 0;
-    let inputStrafe = 0;
+    // Read combined keyboard + analog touch movement input
+    let inputForward = this.touchForward;
+    let inputStrafe = this.touchStrafe;
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) inputForward += 1;
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) inputForward -= 1;
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) inputStrafe += 1;
     if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) inputStrafe -= 1;
+
+    inputForward = THREE.MathUtils.clamp(inputForward, -1, 1);
+    inputStrafe = THREE.MathUtils.clamp(inputStrafe, -1, 1);
 
     this.forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this.right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
@@ -209,16 +242,19 @@ export class PlayerController {
     this.moveDir.addScaledVector(this.forward, inputForward);
     this.moveDir.addScaledVector(this.right, inputStrafe);
 
-    const hasMove = this.moveDir.lengthSq() > 0;
-    if (hasMove) this.moveDir.normalize();
+    const rawMag = this.moveDir.length();
+    const hasMove = rawMag > 0.001;
+    const inputMag = Math.min(1, rawMag);
+    if (hasMove) this.moveDir.divideScalar(rawMag);
 
+    const keySprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
     const wantSprint =
-      (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) &&
-      inputForward > 0 &&
+      (keySprint || this.touchSprint) &&
+      inputForward > 0.2 &&
       !isAiming &&
       !inWater;
 
-    const maxSpeed = inWater || isAiming ? 3.4 : wantSprint ? 9.5 : 5.8;
+    const maxSpeed = (inWater || isAiming ? 3.4 : wantSprint ? 9.5 : 5.8) * inputMag;
 
     const prevX = this.position.x;
     const prevZ = this.position.z;
@@ -251,10 +287,11 @@ export class PlayerController {
     }
 
     // Jump & gravity
-    if (this.isGrounded && this.keys.has('Space')) {
+    if (this.isGrounded && (this.keys.has('Space') || this.jumpQueued)) {
       this.verticalVel = this.jumpSpeed;
       this.isGrounded = false;
     }
+    this.jumpQueued = false;
 
     this.verticalVel += this.gravity * dt;
     this.position.y += this.verticalVel * dt;
