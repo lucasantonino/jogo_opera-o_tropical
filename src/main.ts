@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { SoundEngine } from './audio';
+import { createBoatSystem } from './boat';
 import { createEnemySystem } from './enemies';
+import { createHelicopterSystem } from './helicopter';
 import { createIsland } from './island';
 import { PlayerController } from './player';
 import { createTargets } from './targets';
@@ -15,6 +17,7 @@ function requireEl<T extends HTMLElement>(id: string): T {
 
 const canvasContainer = requireEl<HTMLDivElement>('canvas-container');
 const damageVignetteEl = requireEl<HTMLDivElement>('damage-vignette');
+const bloodOverlayEl = requireEl<HTMLDivElement>('blood-overlay');
 const overlayEl = requireEl<HTMLDivElement>('overlay');
 const touchModeBtn = requireEl<HTMLButtonElement>('touch-mode-btn');
 const playBtn = requireEl<HTMLButtonElement>('play-btn');
@@ -25,16 +28,22 @@ const restartBtn = requireEl<HTMLButtonElement>('restart-btn');
 const waveCounterEl = requireEl<HTMLSpanElement>('wave-counter');
 const enemyCounterEl = requireEl<HTMLSpanElement>('enemy-counter');
 const killCounterEl = requireEl<HTMLSpanElement>('kill-counter');
+const partsCounterEl = requireEl<HTMLSpanElement>('parts-counter');
+const islandBadgeEl = requireEl<HTMLSpanElement>('island-badge');
 const targetCounterEl = requireEl<HTMLSpanElement>('target-counter');
 const healthValueEl = requireEl<HTMLSpanElement>('health-value');
 const healthBarFillEl = requireEl<HTMLDivElement>('health-bar-fill');
 const statusIndicatorEl = requireEl<HTMLDivElement>('status-indicator');
 const toastEl = requireEl<HTMLDivElement>('toast');
+const interactPromptEl = requireEl<HTMLDivElement>('interact-prompt');
 const crosshairEl = requireEl<HTMLDivElement>('crosshair');
 const hitmarkerEl = requireEl<HTMLDivElement>('hitmarker');
 const reloadPromptEl = requireEl<HTMLDivElement>('reload-prompt');
+const weaponNameEl = requireEl<HTMLDivElement>('weapon-name');
+const ammoReadoutEl = requireEl<HTMLDivElement>('ammo-readout');
 const ammoMagEl = requireEl<HTMLSpanElement>('ammo-mag');
 const ammoReserveEl = requireEl<HTMLSpanElement>('ammo-reserve');
+const weaponSlotEls = Array.from(document.querySelectorAll<HTMLElement>('.weapon-slot'));
 
 // Three.js scene, camera, and renderer
 const scene = new THREE.Scene();
@@ -43,7 +52,7 @@ const camera = new THREE.PerspectiveCamera(
   75,
   window.innerWidth / window.innerHeight,
   0.05,
-  600
+  750
 );
 // Crucial: add camera to scene so camera-mounted weapon viewmodel renders
 scene.add(camera);
@@ -61,7 +70,15 @@ canvasContainer.appendChild(renderer.domElement);
 const audio = new SoundEngine();
 const island = createIsland(scene);
 const targets = createTargets(scene, island.colliders);
-const enemies = createEnemySystem(scene, island.colliders, island.shootableEnvironment, audio);
+const helicopter = createHelicopterSystem(scene, audio);
+const boat = createBoatSystem(scene, audio);
+const enemies = createEnemySystem(
+  scene,
+  island.colliders,
+  island.shootableEnvironment,
+  audio,
+  helicopter
+);
 const player = new PlayerController(camera, island.colliders, audio);
 const weapon = new WeaponSystem(
   camera,
@@ -87,6 +104,32 @@ let touchModeEnabled = TouchControls.isTouchDevice();
 let touchModeManuallyToggled = false;
 let touchAdsActive = false;
 
+function tryBoardBoat(): void {
+  if (!isPlaying || gameOverShown) return;
+  const pos = player.getPosition();
+  if (!boat.canBoard(pos)) return;
+
+  const targetIsland = boat.getState().currentIsland === 1 ? 2 : 1;
+  const started = boat.startVoyage((newIsland, landingPos) => {
+    player.setPose(landingPos, newIsland === 2 ? 0 : Math.PI, -0.04);
+    island.setActiveIsland(newIsland);
+    enemies.setActiveIsland(newIsland, landingPos);
+    showToast(
+      newIsland === 2
+        ? 'Você chegou à Ilha 2! Cuidado com os novos inimigos!'
+        : 'De volta à Ilha 1!',
+      3.0
+    );
+  });
+
+  if (started) {
+    weapon.setFiringHeld(false);
+    weapon.setAiming(false);
+    touchAdsActive = false;
+    showToast(`Navegando para a Ilha ${targetIsland}...`, 2.6);
+  }
+}
+
 const touchControls = new TouchControls({
   onMove: (forward, strafe, sprint) => {
     player.setTouchMove(forward, strafe, sprint);
@@ -97,22 +140,32 @@ const touchControls = new TouchControls({
     weapon.addMouseSway(looked.dx, looked.dy);
   },
   onFireChange: (firing) => {
-    if (!isPlaying) return;
+    if (!isPlaying || boat.getState().isSailing) return;
     weapon.setFiringHeld(firing);
   },
   onAdsToggle: () => {
-    if (!isPlaying) return;
+    if (!isPlaying || boat.getState().isSailing) return;
     touchAdsActive = !touchAdsActive;
     weapon.setAiming(touchAdsActive);
     touchControls.setAdsActive(touchAdsActive);
   },
   onJump: () => {
-    if (!isPlaying) return;
+    if (!isPlaying || boat.getState().isSailing) return;
     player.triggerJump();
   },
   onReload: () => {
-    if (!isPlaying) return;
+    if (!isPlaying || boat.getState().isSailing) return;
     weapon.startReload();
+  },
+  onWeaponCycle: () => {
+    if (!isPlaying || boat.getState().isSailing) return;
+    touchAdsActive = false;
+    weapon.setAiming(false);
+    weapon.cycleWeapon(1);
+    touchControls.setAdsActive(false);
+  },
+  onInteract: () => {
+    tryBoardBoat();
   },
   onPause: () => {
     pauseGame();
@@ -245,8 +298,10 @@ function restartGame(): void {
   resetCountdown = 0;
   toastTimer = 0;
   toastEl.classList.add('hidden');
+  island.setActiveIsland(1);
   player.reset();
   weapon.reset();
+  boat.reset();
   enemies.reset();
   targets.resetAll();
   touchControls.reset();
@@ -308,7 +363,7 @@ document.addEventListener('pointerlockerror', () => {
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!isPlaying || touchModeEnabled) return;
+  if (!isPlaying || touchModeEnabled || boat.getState().isSailing) return;
   let moveX = e.movementX;
   let moveY = e.movementY;
   if (document.pointerLockElement !== renderer.domElement) {
@@ -324,7 +379,7 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
-  if (!isPlaying || touchModeEnabled) return;
+  if (!isPlaying || touchModeEnabled || boat.getState().isSailing) return;
   if (e.button === 0) {
     weapon.setFiringHeld(true);
   } else if (e.button === 2) {
@@ -341,6 +396,17 @@ window.addEventListener('mouseup', (e) => {
   }
 });
 
+window.addEventListener(
+  'wheel',
+  (e) => {
+    if (!isPlaying || touchModeEnabled || boat.getState().isSailing) return;
+    if (Math.abs(e.deltaY) > 4) {
+      weapon.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+    }
+  },
+  { passive: true }
+);
+
 window.addEventListener('contextmenu', (e) => {
   e.preventDefault();
 });
@@ -351,6 +417,8 @@ window.addEventListener('keydown', (e) => {
     pauseGame();
     return;
   }
+  if (boat.getState().isSailing) return;
+
   player.handleKeyDown(e.code);
   if (e.code === 'KeyR') {
     weapon.startReload();
@@ -359,6 +427,16 @@ window.addEventListener('keydown', (e) => {
     weapon.refillReserve();
     resetScheduled = false;
     showToast('Alvos reposicionados!', 1.8);
+  } else if (e.code === 'Digit1') {
+    weapon.selectWeapon('rifle');
+  } else if (e.code === 'Digit2') {
+    weapon.selectWeapon('pistol');
+  } else if (e.code === 'Digit3') {
+    weapon.selectWeapon('knife');
+  } else if (e.code === 'KeyQ') {
+    weapon.cycleWeapon(1);
+  } else if (e.code === 'KeyE') {
+    tryBoardBoat();
   }
 });
 
@@ -403,6 +481,21 @@ function updateHud(
   enemyCounterEl.textContent = String(enemyProgress.alive);
   killCounterEl.textContent = String(enemyProgress.kills);
 
+  const boatState = boat.getState();
+  partsCounterEl.textContent = `${boatState.partsCollected} / ${boatState.partsRequired}`;
+  partsCounterEl.classList.toggle('parts-ready', boatState.isRepaired);
+  islandBadgeEl.textContent = String(boatState.currentIsland);
+
+  if (boatState.nearbyPrompt && isPlaying && !boatState.isSailing) {
+    interactPromptEl.textContent = boatState.nearbyPrompt;
+    interactPromptEl.classList.toggle('locked', !boatState.isRepaired);
+    interactPromptEl.classList.remove('hidden');
+  } else {
+    interactPromptEl.classList.add('hidden');
+  }
+
+  touchControls.setInteractVisible(isPlaying && boat.canBoard(player.getPosition()));
+
   const health = player.getHealth();
   const hpPercent = Math.max(0, Math.min(100, (health.current / health.max) * 100));
   healthValueEl.textContent = String(health.current);
@@ -415,12 +508,23 @@ function updateHud(
   damageVignetteEl.style.opacity = String(vignetteOpacity);
   damageVignetteEl.classList.toggle('low-health', health.current <= 30 && !health.isDead);
 
-  const wState = weapon.getState();
-  ammoMagEl.textContent = String(wState.mag);
-  ammoReserveEl.textContent = String(wState.reserve);
-  ammoMagEl.classList.toggle('low-ammo', wState.mag <= 7);
+  // Blood splatter screen intensity: spikes sharply on hit + persistent splatters when HP <= 40
+  const lowHpBlood = health.current <= 40 && !health.isDead ? (40 - health.current) / 70 : 0;
+  const bloodOpacity = Math.min(0.96, Math.max(health.damageFlash * 0.92, lowHpBlood));
+  bloodOverlayEl.style.opacity = String(bloodOpacity);
 
-  const needReload = !isReloading && wState.mag <= 7 && wState.reserve > 0;
+  const wState = weapon.getState();
+  weaponNameEl.textContent = wState.name;
+  ammoReadoutEl.classList.toggle('melee-mode', wState.isMelee);
+  ammoMagEl.textContent = wState.isMelee ? '∞' : String(wState.mag);
+  ammoReserveEl.textContent = wState.isMelee ? '' : String(wState.reserve);
+  ammoMagEl.classList.toggle('low-ammo', !wState.isMelee && wState.mag <= Math.ceil(wState.magSize * 0.25));
+
+  for (const el of weaponSlotEls) {
+    el.classList.toggle('active', el.dataset.weapon === wState.id);
+  }
+
+  const needReload = !wState.isMelee && !isReloading && wState.mag <= Math.ceil(wState.magSize * 0.25) && wState.reserve > 0;
   reloadPromptEl.classList.toggle('hidden', !needReload);
 
   crosshairEl.classList.toggle('aiming', isAiming);
@@ -432,7 +536,7 @@ function updateHud(
     statusIndicatorEl.textContent = 'RECARREGANDO...';
     statusIndicatorEl.classList.add('reloading');
     statusIndicatorEl.classList.remove('hidden');
-  } else if (inWater) {
+  } else if (inWater && !boatState.isSailing) {
     statusIndicatorEl.textContent = 'ÁGUA RASA';
     statusIndicatorEl.classList.remove('reloading');
     statusIndicatorEl.classList.remove('hidden');
@@ -464,9 +568,20 @@ function animate(): void {
     }
   }
 
+  const sailingPose = boat.getVoyagePose();
+  if (sailingPose) {
+    player.setPose(sailingPose.position, sailingPose.yaw, sailingPose.pitch);
+  }
+
   const weaponState = weapon.getState();
-  const playerStatus = player.update(dt, isPlaying, weaponState.isAiming);
-  const shot = weapon.update(dt, isPlaying, playerStatus.speedRatio, playerStatus.isSprinting);
+  const isSailing = sailingPose !== null;
+  const playerStatus = player.update(dt, isPlaying && !isSailing, weaponState.isAiming);
+  const shot = weapon.update(
+    dt,
+    isPlaying && !isSailing,
+    playerStatus.speedRatio,
+    playerStatus.isSprinting
+  );
 
   if (shot.fired) {
     player.applyRecoilKick(shot.pitchKick, shot.yawKick);
@@ -476,11 +591,30 @@ function animate(): void {
     }
   }
 
+  const playerPos = player.getPosition();
+  helicopter.update(dt, isPlaying, playerPos);
+
+  const pickup = boat.update(dt, isPlaying, playerPos);
+  if (pickup.collected) {
+    const bState = boat.getState();
+    if (bState.isRepaired) {
+      showToast(
+        `${pickup.partName} coletado (5/5)! Lancha desbloqueada na praia norte!`,
+        3.5
+      );
+    } else {
+      showToast(
+        `Peça coletada: ${pickup.partName} (${bState.partsCollected}/${bState.partsRequired})`,
+        2.4
+      );
+    }
+  }
+
   const enemyStep = enemies.update(
     dt,
-    isPlaying,
+    isPlaying && !isSailing,
     camera,
-    player.getPosition(),
+    playerPos,
     (damage) => {
       const died = player.takeDamage(damage);
       if (died) {
@@ -492,7 +626,17 @@ function animate(): void {
   if (enemyStep.waveCleared && !player.getHealth().isDead) {
     player.heal(25);
     weapon.refillReserve();
-    showToast(`Onda ${enemyStep.clearedWave} limpa! +25 VIDA — Próxima onda...`, 2.6);
+
+    const bState = boat.getState();
+    if (bState.partsCollected + bState.activeDrops < bState.partsRequired && enemyStep.lastKillPos) {
+      boat.spawnPartDrop(enemyStep.lastKillPos);
+      showToast(
+        `Onda ${enemyStep.clearedWave} limpa! +25 VIDA — Último inimigo dropou uma peça da lancha!`,
+        3.2
+      );
+    } else {
+      showToast(`Onda ${enemyStep.clearedWave} limpa! +25 VIDA — Próxima onda chegando!`, 2.6);
+    }
   }
 
   island.update(elapsed);

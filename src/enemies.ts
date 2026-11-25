@@ -1,9 +1,13 @@
 import * as THREE from 'three';
 import { SoundEngine } from './audio';
+import { HelicopterSystem } from './helicopter';
 import {
   Collider,
+  getIslandCenter,
   getTerrainHeight,
   ISLAND_RADIUS,
+  ISLAND2_RADIUS,
+  IslandId,
   MAX_WALK_DEPTH,
   SPAWN_X,
   SPAWN_Z,
@@ -25,6 +29,7 @@ export interface EnemyProgress {
 export interface EnemyUpdateResult {
   waveCleared: boolean;
   clearedWave: number;
+  lastKillPos: THREE.Vector3 | null;
 }
 
 interface EnemyUnit {
@@ -43,6 +48,7 @@ interface EnemyUnit {
   hp: number;
   maxHp: number;
   dead: boolean;
+  dropping: boolean;
   deathTimer: number;
   hitFlashTimer: number;
   muzzleFlashTimer: number;
@@ -68,8 +74,9 @@ interface EnemyBolt {
 export interface EnemySystem {
   group: THREE.Group;
   shootableObjects: THREE.Object3D[];
-  hitEnemy(object: THREE.Object3D, point: THREE.Vector3): EnemyHitResult;
+  hitEnemy(object: THREE.Object3D, point: THREE.Vector3, bodyDamage?: number): EnemyHitResult;
   getProgress(): EnemyProgress;
+  setActiveIsland(id: IslandId, playerPos: THREE.Vector3): void;
   reset(): void;
   update(
     dt: number,
@@ -116,7 +123,8 @@ export function createEnemySystem(
   scene: THREE.Scene,
   colliders: Collider[],
   environmentObjects: THREE.Object3D[],
-  audio: SoundEngine
+  audio: SoundEngine,
+  helicopter: HelicopterSystem
 ): EnemySystem {
   const group = new THREE.Group();
   scene.add(group);
@@ -147,56 +155,50 @@ export function createEnemySystem(
   let totalInWave = 5;
   let kills = 0;
   let waveTransitionTimer = -1;
+  let activeIsland: IslandId = 1;
+  let pendingDrops = 0;
+  let lastKillPos: THREE.Vector3 | null = null;
 
-  function findSpawnPoint(playerPos: THREE.Vector3): { x: number; y: number; z: number } {
-    let best: { x: number; y: number; z: number } | null = null;
+  function findDropZone(playerPos: THREE.Vector3): { x: number; y: number; z: number } {
+    const center = getIslandCenter(activeIsland);
+    const maxRadius = (activeIsland === 1 ? ISLAND_RADIUS : ISLAND2_RADIUS) - 8;
+
     for (let attempt = 0; attempt < 90; attempt++) {
       const angle = Math.random() * Math.PI * 2;
-      const dist = 24 + Math.random() * 34; // 24m–58m from player
+      const dist = 22 + Math.random() * 23; // 22m–45m from player
       const x = playerPos.x + Math.cos(angle) * dist;
       const z = playerPos.z + Math.sin(angle) * dist;
 
-      if (Math.hypot(x, z) > ISLAND_RADIUS - 4) continue;
+      if (Math.hypot(x - center.x, z - center.z) > maxRadius) continue;
       const y = getTerrainHeight(x, z);
-      if (y <= 0.85 || y > 13) continue;
+      if (y <= 1.0 || y > 13.5) continue;
 
       let blocked = false;
       for (const col of colliders) {
-        if (Math.hypot(x - col.x, z - col.z) < col.radius + 1.2) {
+        if (Math.hypot(x - col.x, z - col.z) < col.radius + 2.2) {
           blocked = true;
           break;
         }
       }
       if (blocked) continue;
 
-      for (const other of enemies) {
-        if (!other.dead && Math.hypot(x - other.root.position.x, z - other.root.position.z) < 3.5) {
-          blocked = true;
-          break;
-        }
-      }
-      if (blocked) continue;
-
-      best = { x, y, z };
-      break;
+      return { x, y, z };
     }
 
-    if (best) return best;
-
-    // Fallback ring inside the island interior if random search was congested
+    // Fallback ring around active island center away from player
     for (let i = 0; i < 24; i++) {
       const a = (i / 24) * Math.PI * 2;
-      const x = Math.cos(a) * 28;
-      const z = Math.sin(a) * 28;
+      const x = center.x + Math.cos(a) * 24;
+      const z = center.z + Math.sin(a) * 24;
       const y = getTerrainHeight(x, z);
-      if (y > 0.85 && Math.hypot(x - playerPos.x, z - playerPos.z) > 16) {
+      if (y > 1.0 && Math.hypot(x - playerPos.x, z - playerPos.z) > 15) {
         return { x, y, z };
       }
     }
-    return { x: 0, y: getTerrainHeight(0, 0), z: 0 };
+    return { x: center.x, y: getTerrainHeight(center.x, center.z), z: center.z };
   }
 
-  function buildEnemyUnit(x: number, y: number, z: number): EnemyUnit {
+  function buildEnemyUnit(x: number, y: number, z: number, dropping: boolean): EnemyUnit {
     const id = nextId++;
     const root = new THREE.Group();
     root.position.set(x, y, z);
@@ -337,6 +339,7 @@ export function createEnemySystem(
       hp: 100,
       maxHp: 100,
       dead: false,
+      dropping,
       deathTimer: 0,
       hitFlashTimer: 0,
       muzzleFlashTimer: 0,
@@ -369,10 +372,15 @@ export function createEnemySystem(
   function spawnWave(waveNum: number, playerPos: THREE.Vector3): void {
     wave = waveNum;
     totalInWave = Math.min(14, 5 + (waveNum - 1) * 2);
-    for (let i = 0; i < totalInWave; i++) {
-      const pt = findSpawnPoint(playerPos);
-      enemies.push(buildEnemyUnit(pt.x, pt.y, pt.z));
-    }
+    pendingDrops = totalInWave;
+    lastKillPos = null;
+
+    const dropPt = findDropZone(playerPos);
+    helicopter.dispatchDrop(new THREE.Vector3(dropPt.x, dropPt.y, dropPt.z), totalInWave, (chopperPos) => {
+      pendingDrops = Math.max(0, pendingDrops - 1);
+      const unit = buildEnemyUnit(chopperPos.x, chopperPos.y, chopperPos.z, true);
+      enemies.push(unit);
+    });
   }
 
   function spawnBolt(enemy: EnemyUnit, playerPos: THREE.Vector3): void {
@@ -416,7 +424,7 @@ export function createEnemySystem(
     group,
     shootableObjects,
 
-    hitEnemy(object: THREE.Object3D, point: THREE.Vector3): EnemyHitResult {
+    hitEnemy(object: THREE.Object3D, point: THREE.Vector3, bodyDamage = 34): EnemyHitResult {
       const enemyId = object.userData.enemyId as number | undefined;
       if (enemyId === undefined) {
         return { hit: false, killed: false, headshot: false };
@@ -428,7 +436,7 @@ export function createEnemySystem(
       }
 
       const headshot = Boolean(object.userData.isHead);
-      const damage = headshot ? 100 : 34;
+      const damage = headshot ? 100 : bodyDamage;
       enemy.hp = Math.max(0, enemy.hp - damage);
       enemy.hitFlashTimer = 0.12;
 
@@ -454,10 +462,16 @@ export function createEnemySystem(
 
       if (enemy.hp <= 0) {
         enemy.dead = true;
+        enemy.dropping = false;
         enemy.deathTimer = 0;
         enemy.hpBarGroup.visible = false;
         enemy.muzzleFlash.visible = false;
         kills++;
+        lastKillPos = new THREE.Vector3(
+          enemy.root.position.x,
+          getTerrainHeight(enemy.root.position.x, enemy.root.position.z),
+          enemy.root.position.z
+        );
         removeShootables(enemy);
         return { hit: true, killed: true, headshot };
       }
@@ -466,11 +480,27 @@ export function createEnemySystem(
     },
 
     getProgress(): EnemyProgress {
-      let alive = 0;
+      let alive = pendingDrops;
       for (const e of enemies) {
         if (!e.dead) alive++;
       }
       return { wave, alive, totalInWave, kills };
+    },
+
+    setActiveIsland(id: IslandId, playerPos: THREE.Vector3): void {
+      activeIsland = id;
+      while (enemies.length > 0) {
+        const e = enemies.pop()!;
+        disposeEnemy(e);
+      }
+      while (bolts.length > 0) {
+        const b = bolts.pop()!;
+        group.remove(b.mesh);
+      }
+      helicopter.reset();
+      pendingDrops = 0;
+      waveTransitionTimer = -1;
+      spawnWave(wave + 1, playerPos);
     },
 
     reset(): void {
@@ -482,7 +512,11 @@ export function createEnemySystem(
         const b = bolts.pop()!;
         group.remove(b.mesh);
       }
+      helicopter.reset();
+      activeIsland = 1;
       kills = 0;
+      pendingDrops = 0;
+      lastKillPos = null;
       waveTransitionTimer = -1;
       spawnWave(1, new THREE.Vector3(SPAWN_X, getTerrainHeight(SPAWN_X, SPAWN_Z) + 1.72, SPAWN_Z));
     },
@@ -584,6 +618,16 @@ export function createEnemySystem(
         }
 
         if (!isPlaying) continue;
+
+        if (e.dropping) {
+          e.root.position.y -= 9.0 * dt;
+          const groundY = getTerrainHeight(e.root.position.x, e.root.position.z);
+          if (e.root.position.y <= groundY) {
+            e.root.position.y = groundY;
+            e.dropping = false;
+          }
+          continue;
+        }
 
         const ex = e.root.position.x;
         const ez = e.root.position.z;
@@ -736,10 +780,13 @@ export function createEnemySystem(
       }
 
       // Handle wave clearing and next wave spawn countdown
+      let clearedDropPos: THREE.Vector3 | null = null;
       if (isPlaying) {
-        if (aliveCount === 0 && waveTransitionTimer < 0) {
+        if (aliveCount === 0 && pendingDrops === 0 && waveTransitionTimer < 0) {
           waveCleared = true;
           clearedWave = wave;
+          clearedDropPos = lastKillPos;
+          lastKillPos = null;
           waveTransitionTimer = 1.8;
         } else if (waveTransitionTimer >= 0) {
           waveTransitionTimer -= dt;
@@ -750,7 +797,7 @@ export function createEnemySystem(
         }
       }
 
-      return { waveCleared, clearedWave };
+      return { waveCleared, clearedWave, lastKillPos: clearedDropPos };
     },
   };
 }

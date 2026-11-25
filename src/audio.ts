@@ -315,6 +315,131 @@ export class SoundEngine {
     osc2.stop(now + 0.12);
   }
 
+  /** Tighter, snappier 9mm pistol crack. */
+  playPistolShot(): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(2800, now);
+    filter.Q.value = 0.85;
+
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.45, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+    noise.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(this.masterGain);
+    noise.start(now, Math.random() * 0.5, 0.11);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.exponentialRampToValueAtTime(65, now + 0.065);
+
+    const oscGain = this.ctx.createGain();
+    oscGain.gain.setValueAtTime(0.38, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+
+    osc.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.08);
+  }
+
+  /** Fast filtered noise whoosh for tactical knife slashes. */
+  playKnifeSlash(): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(900, now);
+    filter.frequency.exponentialRampToValueAtTime(3200, now + 0.06);
+    filter.frequency.exponentialRampToValueAtTime(700, now + 0.14);
+    filter.Q.value = 1.6;
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.01, now);
+    gain.gain.linearRampToValueAtTime(0.28, now + 0.04);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    noise.start(now, Math.random() * 0.4, 0.16);
+  }
+
+  /** Rising two-tone synth chime when picking up a boat part. */
+  playPickup(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+
+    const notes: Array<[number, number]> = [
+      [587.33, 0],
+      [880, 0.09],
+    ];
+    for (const [freq, delay] of notes) {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + delay);
+
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(0.22, now + delay);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + delay + 0.22);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now + delay);
+      osc.stop(now + delay + 0.24);
+    }
+  }
+
+  /** Distance-attenuated helicopter rotor blade thump. */
+  playHelicopterRotor(distance: number): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const attenuation = Math.max(0.03, 1 / (1 + Math.max(0, distance) * 0.035));
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(88, now);
+    osc.frequency.exponentialRampToValueAtTime(52, now + 0.075);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.24 * attenuation, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.085);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.09);
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 380;
+
+    const nGain = this.ctx.createGain();
+    nGain.gain.setValueAtTime(0.14 * attenuation, now);
+    nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+    noise.connect(lp);
+    lp.connect(nGain);
+    nGain.connect(this.masterGain);
+    noise.start(now, Math.random() * 0.6, 0.095);
+  }
+
   /** Gentle looping ocean surf ambience modulated by a slow LFO. */
   startAmbience(): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer || this.ambienceStarted) return;

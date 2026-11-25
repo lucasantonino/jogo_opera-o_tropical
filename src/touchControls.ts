@@ -5,6 +5,8 @@ export interface TouchControlsCallbacks {
   onAdsToggle: () => void;
   onJump: () => void;
   onReload: () => void;
+  onWeaponCycle: () => void;
+  onInteract: () => void;
   onPause: () => void;
 }
 
@@ -24,6 +26,8 @@ export class TouchControls {
   private readonly btnAds = getEl<HTMLButtonElement>('btn-ads');
   private readonly btnJump = getEl<HTMLButtonElement>('btn-jump');
   private readonly btnReload = getEl<HTMLButtonElement>('btn-reload');
+  private readonly btnWeapon = getEl<HTMLButtonElement>('btn-weapon');
+  private readonly btnInteract = getEl<HTMLButtonElement>('btn-interact');
   private readonly btnPause = getEl<HTMLButtonElement>('btn-pause');
 
   private readonly callbacks: TouchControlsCallbacks;
@@ -61,6 +65,10 @@ export class TouchControls {
 
   setAdsActive(active: boolean): void {
     this.btnAds.classList.toggle('active', active);
+  }
+
+  setInteractVisible(visible: boolean): void {
+    this.btnInteract.classList.toggle('hidden', !visible);
   }
 
   reset(): void {
@@ -247,6 +255,18 @@ export class TouchControls {
       e.preventDefault();
       e.stopPropagation();
       this.callbacks.onReload();
+    });
+
+    this.btnWeapon.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.callbacks.onWeaponCycle();
+    });
+
+    this.btnInteract.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.callbacks.onInteract();
     });
 
     this.btnPause.addEventListener('pointerdown', (e) => {

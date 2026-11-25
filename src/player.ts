@@ -186,6 +186,15 @@ export class PlayerController {
     this.syncCamera();
   }
 
+  setPose(position: THREE.Vector3, yaw: number, pitch: number): void {
+    this.position.copy(position);
+    this.yaw = yaw;
+    this.pitch = THREE.MathUtils.clamp(pitch, -1.48, 1.48);
+    this.verticalVel = 0;
+    this.isGrounded = true;
+    this.syncCamera();
+  }
+
   private syncCamera(): void {
     this.camera.position.copy(this.position);
     this.camera.rotation.set(
@@ -197,7 +206,7 @@ export class PlayerController {
   }
 
   private isWalkable(x: number, z: number): boolean {
-    if (Math.abs(x) > 96 || Math.abs(z) > 96) return false;
+    if (Math.abs(x) > 260 || z > 120 || z < -320) return false;
     return getTerrainHeight(x, z) >= MAX_WALK_DEPTH;
   }
 

@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 
+export type IslandId = 1 | 2;
+
 export const ISLAND_RADIUS = 72;
+export const ISLAND2_CENTER_X = 0;
+export const ISLAND2_CENTER_Z = -190;
+export const ISLAND2_RADIUS = 62;
 export const WATER_LEVEL = 0;
 export const MAX_WALK_DEPTH = -0.65;
 export const SPAWN_X = 0;
@@ -18,7 +23,12 @@ export interface IslandEnvironment {
   group: THREE.Group;
   colliders: Collider[];
   shootableEnvironment: THREE.Object3D[];
+  setActiveIsland(id: IslandId): void;
   update(time: number): void;
+}
+
+export function getIslandCenter(id: IslandId): { x: number; z: number } {
+  return id === 1 ? { x: 0, z: 0 } : { x: ISLAND2_CENTER_X, z: ISLAND2_CENTER_Z };
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -86,8 +96,7 @@ export function createSeededRandom(seed: number): () => number {
   };
 }
 
-/** Computes procedural island elevation at world coordinates (x, z). */
-export function getTerrainHeight(x: number, z: number): number {
+function getIsland1Height(x: number, z: number): number {
   const r = Math.hypot(x, z);
   const coastNoise = fbm2D(x * 0.022 + 5.2, z * 0.022 - 3.7, 4) * 10;
   const effectiveRadius = ISLAND_RADIUS + coastNoise;
@@ -111,6 +120,34 @@ export function getTerrainHeight(x: number, z: number): number {
   const micro = fbm2D(x * 0.11 + 3.1, z * 0.11 - 8.4, 3) * 0.35 * (1 - smoothstep(0.75, 1.02, u));
 
   return beachShelf + seabed + hills + ridge + micro;
+}
+
+function getIsland2Height(x: number, z: number): number {
+  const lx = x - ISLAND2_CENTER_X;
+  const lz = z - ISLAND2_CENTER_Z;
+  const r = Math.hypot(lx, lz);
+  const coastNoise = fbm2D(lx * 0.026 - 8.3, lz * 0.026 + 6.4, 4) * 8.5;
+  const effectiveRadius = ISLAND2_RADIUS + coastNoise;
+  const u = r / effectiveRadius;
+
+  const beachShelf = 1.55 * (1 - smoothstep(0.66, 1.02, u));
+  const seabed = -6.4 * smoothstep(0.9, 1.36, u);
+
+  const highlandNoise = fbm2D(lx * 0.042 - 14.1, lz * 0.042 + 9.2, 4);
+  const highlands = (5.4 + 3.2 * highlandNoise) * (1 - smoothstep(0.2, 0.84, u));
+
+  const peakMask = Math.max(0, 1 - u / 0.48);
+  const peakDetail = fbm2D(lx * 0.08 + 4.7, lz * 0.08 - 5.5, 4);
+  const peak = Math.pow(peakMask, 1.35) * (8.6 + 2.8 * peakDetail);
+
+  const micro = fbm2D(lx * 0.12 - 2.3, lz * 0.12 + 7.1, 3) * 0.4 * (1 - smoothstep(0.74, 1.02, u));
+
+  return beachShelf + seabed + highlands + peak + micro;
+}
+
+/** Computes procedural dual-island elevation at world coordinates (x, z). */
+export function getTerrainHeight(x: number, z: number): number {
+  return Math.max(getIsland1Height(x, z), getIsland2Height(x, z));
 }
 
 /** Approximate terrain slope normal Y component via finite differences. */
@@ -163,16 +200,23 @@ function createGrainTexture(): THREE.CanvasTexture {
   return texture;
 }
 
-function buildTerrainMesh(): THREE.Mesh {
-  const geometry = new THREE.PlaneGeometry(220, 220, 140, 140);
+function buildTerrainMesh(
+  size: number,
+  segments: number,
+  centerX: number,
+  centerZ: number,
+  volcanicTheme: boolean,
+  grainTexture: THREE.Texture
+): THREE.Mesh {
+  const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
   // Rotate before setting Y heights so world (x, z) matches getTerrainHeight(x, z)
   geometry.rotateX(-Math.PI / 2);
 
   const pos = geometry.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
-    const wx = pos.getX(i);
-    const wz = pos.getZ(i);
-    pos.setY(i, getTerrainHeight(wx, wz));
+    const wx = pos.getX(i) + centerX;
+    const wz = pos.getZ(i) + centerZ;
+    pos.setXYZ(i, wx, getTerrainHeight(wx, wz), wz);
   }
 
   geometry.computeVertexNormals();
@@ -180,12 +224,12 @@ function buildTerrainMesh(): THREE.Mesh {
   const normals = geometry.attributes.normal as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
 
-  const cSeabed = new THREE.Color(0x4b747a);
-  const cWetSand = new THREE.Color(0xc4a46a);
-  const cDrySand = new THREE.Color(0xecd69f);
-  const cGrassLow = new THREE.Color(0x5f9d45);
-  const cGrassHigh = new THREE.Color(0x447c36);
-  const cRock = new THREE.Color(0x7d766d);
+  const cSeabed = new THREE.Color(volcanicTheme ? 0x3b5861 : 0x4b747a);
+  const cWetSand = new THREE.Color(volcanicTheme ? 0x7c7061 : 0xc4a46a);
+  const cDrySand = new THREE.Color(volcanicTheme ? 0x9f907a : 0xecd69f);
+  const cGrassLow = new THREE.Color(volcanicTheme ? 0x4d6b3c : 0x5f9d45);
+  const cGrassHigh = new THREE.Color(volcanicTheme ? 0x38522d : 0x447c36);
+  const cRock = new THREE.Color(volcanicTheme ? 0x5a4c46 : 0x7d766d);
   const tmpColor = new THREE.Color();
   const grassColor = new THREE.Color();
 
@@ -211,9 +255,9 @@ function buildTerrainMesh(): THREE.Mesh {
       tmpColor.copy(grassColor);
     }
 
-    // Blend cliff rock on steep slopes or high central ridge
-    const slopeRock = smoothstep(0.82, 0.65, ny);
-    const heightRock = smoothstep(7.2, 10.4, wy);
+    // Blend cliff/volcanic rock on steep slopes or high central ridge
+    const slopeRock = smoothstep(volcanicTheme ? 0.86 : 0.82, 0.65, ny);
+    const heightRock = smoothstep(volcanicTheme ? 5.8 : 7.2, volcanicTheme ? 9.2 : 10.4, wy);
     const rockFactor = clamp(Math.max(slopeRock, heightRock), 0, 1);
     tmpColor.lerp(cRock, rockFactor);
 
@@ -226,7 +270,7 @@ function buildTerrainMesh(): THREE.Mesh {
 
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    map: createGrainTexture(),
+    map: grainTexture,
     roughness: 0.92,
     metalness: 0.02,
   });
@@ -234,7 +278,7 @@ function buildTerrainMesh(): THREE.Mesh {
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
   mesh.castShadow = true;
-  mesh.name = 'terrain';
+  mesh.name = volcanicTheme ? 'terrain-island-2' : 'terrain-island-1';
   return mesh;
 }
 
@@ -380,9 +424,9 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
   const shootableEnvironment: THREE.Object3D[] = [];
   const rng = createSeededRandom(20261125);
 
-  // Sky & atmospheric distance fog
+  // Sky & atmospheric distance fog (tuned so Island 2 silhouette is visible across the channel)
   scene.background = new THREE.Color(0x87ceeb);
-  scene.fog = new THREE.FogExp2(0x9ad4eb, 0.0045);
+  scene.fog = new THREE.FogExp2(0x9ad4eb, 0.0031);
 
   // Tropical sunlight & sky/sand hemisphere illumination
   const hemiLight = new THREE.HemisphereLight(0xc2ebff, 0xd8c195, 0.85);
@@ -400,6 +444,7 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
   sunLight.shadow.camera.far = 260;
   sunLight.shadow.bias = -0.0005;
   group.add(sunLight);
+  group.add(sunLight.target);
 
   // Subtle glowing sun disc in the sky
   const sunDisc = new THREE.Mesh(
@@ -409,13 +454,16 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
   sunDisc.position.set(170, 215, 115);
   group.add(sunDisc);
 
-  // Procedural terrain
-  const terrain = buildTerrainMesh();
-  group.add(terrain);
-  shootableEnvironment.push(terrain);
+  // Procedural dual-island terrain meshes
+  const grainTex = createGrainTexture();
+  const terrain1 = buildTerrainMesh(220, 140, 0, 0, false, grainTex);
+  const terrain2 = buildTerrainMesh(180, 120, ISLAND2_CENTER_X, ISLAND2_CENTER_Z, true, grainTex);
+  group.add(terrain1);
+  group.add(terrain2);
+  shootableEnvironment.push(terrain1, terrain2);
 
-  // Tropical animated ocean
-  const oceanGeo = new THREE.PlaneGeometry(700, 700, 48, 48);
+  // Tropical animated ocean spanning both islands
+  const oceanGeo = new THREE.PlaneGeometry(950, 950, 56, 56);
   oceanGeo.rotateX(-Math.PI / 2);
   const oceanPos = oceanGeo.attributes.position as THREE.BufferAttribute;
   const oceanBaseX = new Float32Array(oceanPos.count);
@@ -433,16 +481,22 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     opacity: 0.84,
   });
   const oceanMesh = new THREE.Mesh(oceanGeo, oceanMat);
-  oceanMesh.position.y = WATER_LEVEL;
+  oceanMesh.position.set(0, WATER_LEVEL, -95);
   oceanMesh.receiveShadow = true;
   oceanMesh.name = 'ocean';
   group.add(oceanMesh);
 
-  // Shared materials for palm trees and rocks
+  // Shared materials for palm trees, volcanic rocks, and Island 2 outpost props
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x7c5338, roughness: 0.92 });
+  const darkTrunkMat = new THREE.MeshStandardMaterial({ color: 0x4b382d, roughness: 0.94 });
   const frondMat = new THREE.MeshStandardMaterial({
     color: 0x3b8c32,
     roughness: 0.72,
+    side: THREE.DoubleSide,
+  });
+  const darkFrondMat = new THREE.MeshStandardMaterial({
+    color: 0x2d692c,
+    roughness: 0.78,
     side: THREE.DoubleSide,
   });
   const coconutMat = new THREE.MeshStandardMaterial({ color: 0x4d321c, roughness: 0.88 });
@@ -451,8 +505,17 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     roughness: 0.95,
     flatShading: true,
   });
+  const volcanicRockMat = new THREE.MeshStandardMaterial({
+    color: 0x5c4c47,
+    roughness: 0.96,
+    flatShading: true,
+  });
+  const outpostCrateMat = new THREE.MeshStandardMaterial({
+    color: 0x6b4c33,
+    roughness: 0.88,
+  });
 
-  // Place ~36 palm trees on sand and lower grassy hills, avoiding player spawn
+  // Island 1: ~36 palm trees avoiding spawn & northern boat dock corridor
   const placedTrees: Array<{ x: number; z: number }> = [];
   let treeAttempts = 0;
   while (placedTrees.length < 36 && treeAttempts < 600) {
@@ -463,6 +526,7 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     const tz = Math.sin(angle) * dist;
 
     if (Math.hypot(tx - SPAWN_X, tz - SPAWN_Z) < 8.5) continue;
+    if (Math.abs(tx) < 6 && tz < -40) continue; // Keep northern boat dock clear
     const ty = getTerrainHeight(tx, tz);
     if (ty < 0.85 || ty > 5.6) continue;
     if (getTerrainNormalY(tx, tz) < 0.84) continue;
@@ -483,7 +547,7 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     colliders.push({ x: tx, z: tz, radius: 0.42 });
   }
 
-  // Place ~26 coastal and highland rocks
+  // Island 1: ~26 coastal and highland rocks
   let rocksPlaced = 0;
   let rockAttempts = 0;
   while (rocksPlaced < 26 && rockAttempts < 500) {
@@ -494,6 +558,7 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     const rz = Math.sin(angle) * dist;
 
     if (Math.hypot(rx - SPAWN_X, rz - SPAWN_Z) < 7.5) continue;
+    if (Math.abs(rx) < 6 && rz < -40) continue;
     const ry = getTerrainHeight(rx, rz);
     const isShoreRock = ry >= -0.25 && ry <= 1.8;
     const isHighlandRock = ry >= 5.2 && ry <= 12.5;
@@ -516,12 +581,102 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     rocksPlaced++;
   }
 
+  // Island 2: ~22 darker volcanic trees avoiding southern boat landing corridor
+  const placedTrees2: Array<{ x: number; z: number }> = [];
+  let tree2Attempts = 0;
+  while (placedTrees2.length < 22 && tree2Attempts < 500) {
+    tree2Attempts++;
+    const angle = rng() * Math.PI * 2;
+    const dist = 10 + rng() * (ISLAND2_RADIUS - 12);
+    const tx = ISLAND2_CENTER_X + Math.cos(angle) * dist;
+    const tz = ISLAND2_CENTER_Z + Math.sin(angle) * dist;
+
+    if (Math.abs(tx - ISLAND2_CENTER_X) < 7 && tz > ISLAND2_CENTER_Z + 32) continue;
+    const ty = getTerrainHeight(tx, tz);
+    if (ty < 0.85 || ty > 5.8) continue;
+    if (getTerrainNormalY(tx, tz) < 0.82) continue;
+
+    let tooClose = false;
+    for (const existing of placedTrees2) {
+      if (Math.hypot(tx - existing.x, tz - existing.z) < 5.8) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (tooClose) continue;
+
+    placedTrees2.push({ x: tx, z: tz });
+    const palm = buildPalmTree(tx, ty, tz, rng, darkTrunkMat, darkFrondMat, coconutMat);
+    group.add(palm);
+    shootableEnvironment.push(palm);
+    colliders.push({ x: tx, z: tz, radius: 0.42 });
+  }
+
+  // Island 2: ~24 volcanic rocks
+  let rocks2Placed = 0;
+  let rock2Attempts = 0;
+  while (rocks2Placed < 24 && rock2Attempts < 500) {
+    rock2Attempts++;
+    const angle = rng() * Math.PI * 2;
+    const dist = 4 + rng() * (ISLAND2_RADIUS - 4);
+    const rx = ISLAND2_CENTER_X + Math.cos(angle) * dist;
+    const rz = ISLAND2_CENTER_Z + Math.sin(angle) * dist;
+
+    if (Math.abs(rx - ISLAND2_CENTER_X) < 7 && rz > ISLAND2_CENTER_Z + 32) continue;
+    const ry = getTerrainHeight(rx, rz);
+    const isShoreRock = ry >= -0.25 && ry <= 1.9;
+    const isHighlandRock = ry >= 4.5 && ry <= 14.5;
+    if (!isShoreRock && !isHighlandRock) continue;
+
+    let overlaps = false;
+    for (const col of colliders) {
+      if (Math.hypot(rx - col.x, rz - col.z) < col.radius + 3.0) {
+        overlaps = true;
+        break;
+      }
+    }
+    if (overlaps) continue;
+
+    const radius = isShoreRock ? 1.0 + rng() * 1.2 : 0.9 + rng() * 1.1;
+    const rock = buildRock(rx, ry, rz, radius, rng, volcanicRockMat);
+    group.add(rock);
+    shootableEnvironment.push(rock);
+    colliders.push({ x: rx, z: rz, radius: radius * 0.84 });
+    rocks2Placed++;
+  }
+
+  // Island 2: Military outpost supply crates for tactical cover
+  const outpostCoords: Array<[number, number]> = [
+    [-8, ISLAND2_CENTER_Z + 18],
+    [10, ISLAND2_CENTER_Z + 12],
+    [-14, ISLAND2_CENTER_Z - 8],
+    [9, ISLAND2_CENTER_Z - 16],
+  ];
+  for (const [cx, cz] of outpostCoords) {
+    const cy = getTerrainHeight(cx, cz);
+    if (cy < 0.8) continue;
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 1.4), outpostCrateMat);
+    crate.position.set(cx, cy + 0.55, cz);
+    crate.rotation.y = rng() * Math.PI;
+    crate.castShadow = true;
+    crate.receiveShadow = true;
+    group.add(crate);
+    shootableEnvironment.push(crate);
+    colliders.push({ x: cx, z: cz, radius: 0.95 });
+  }
+
   scene.add(group);
 
   return {
     group,
     colliders,
     shootableEnvironment,
+    setActiveIsland(id: IslandId) {
+      const center = getIslandCenter(id);
+      sunLight.position.set(center.x + 78, 98, center.z + 52);
+      sunLight.target.position.set(center.x, 0, center.z);
+      sunLight.target.updateMatrixWorld();
+    },
     update(time: number) {
       for (let i = 0; i < oceanPos.count; i++) {
         const bx = oceanBaseX[i];
