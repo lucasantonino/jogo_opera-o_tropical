@@ -3,7 +3,7 @@ import { SoundEngine } from './audio';
 import { EnemySystem } from './enemies';
 import { TargetsSystem } from './targets';
 
-export type WeaponId = 'rifle' | 'pistol' | 'knife';
+export type WeaponId = 'rifle' | 'pistol' | 'knife' | 'heavy';
 
 export interface WeaponState {
   id: WeaponId;
@@ -14,6 +14,7 @@ export interface WeaponState {
   reserve: number;
   isReloading: boolean;
   isAiming: boolean;
+  heavyUnlocked: boolean;
 }
 
 export interface ShotOutcome {
@@ -62,7 +63,7 @@ interface WeaponConfig {
   adsPos: THREE.Vector3;
 }
 
-const WEAPON_ORDER: WeaponId[] = ['rifle', 'pistol', 'knife'];
+const WEAPON_ORDER: WeaponId[] = ['rifle', 'pistol', 'knife', 'heavy'];
 
 const WEAPON_CONFIGS: Record<WeaponId, WeaponConfig> = {
   rifle: {
@@ -116,6 +117,23 @@ const WEAPON_CONFIGS: Record<WeaponId, WeaponConfig> = {
     hipPos: new THREE.Vector3(0.27, -0.25, -0.42),
     adsPos: new THREE.Vector3(0.27, -0.25, -0.42),
   },
+  heavy: {
+    name: 'RIFLE PESADO .50',
+    isMelee: false,
+    auto: false,
+    magSize: 10,
+    defaultReserve: 50,
+    fireInterval: 0.42,
+    reloadDuration: 1.9,
+    bodyDamage: 120,
+    range: 260,
+    adsFov: 34,
+    recoilZ: 0.11,
+    recoilPitch: 0.12,
+    camPitchKick: 0.025,
+    hipPos: new THREE.Vector3(0.28, -0.25, -0.5),
+    adsPos: new THREE.Vector3(0.0, -0.155, -0.34),
+  },
 };
 
 export class WeaponSystem {
@@ -132,15 +150,19 @@ export class WeaponSystem {
   private readonly rifleGroup = new THREE.Group();
   private readonly pistolGroup = new THREE.Group();
   private readonly knifeGroup = new THREE.Group();
+  private readonly heavyGroup = new THREE.Group();
 
   private readonly rifleMagGroup = new THREE.Group();
   private readonly pistolMagGroup = new THREE.Group();
+  private readonly heavyMagGroup = new THREE.Group();
   private readonly pistolSlideGroup = new THREE.Group();
 
   private readonly rifleMuzzleTip = new THREE.Object3D();
   private readonly rifleEjectionPort = new THREE.Object3D();
   private readonly pistolMuzzleTip = new THREE.Object3D();
   private readonly pistolEjectionPort = new THREE.Object3D();
+  private readonly heavyMuzzleTip = new THREE.Object3D();
+  private readonly heavyEjectionPort = new THREE.Object3D();
 
   private readonly muzzleFlashGroup = new THREE.Group();
   private readonly muzzleLight = new THREE.PointLight(0xffb347, 0, 7);
@@ -150,9 +172,11 @@ export class WeaponSystem {
   private readonly baseFov = 75;
 
   private activeId: WeaponId = 'rifle';
-  private readonly ammo: Record<'rifle' | 'pistol', { mag: number; reserve: number }> = {
+  private heavyUnlocked = false;
+  private readonly ammo: Record<'rifle' | 'pistol' | 'heavy', { mag: number; reserve: number }> = {
     rifle: { mag: 30, reserve: 120 },
     pistol: { mag: 12, reserve: 60 },
+    heavy: { mag: 10, reserve: 50 },
   };
 
   private fireCooldown = 0;
@@ -257,6 +281,7 @@ export class WeaponSystem {
     this.recoilGroup.add(this.rifleGroup);
     this.recoilGroup.add(this.pistolGroup);
     this.recoilGroup.add(this.knifeGroup);
+    this.recoilGroup.add(this.heavyGroup);
 
     // ========================
     // 1. RIFLE (CARABINA M4)
@@ -491,6 +516,118 @@ export class WeaponSystem {
     kArm.rotation.set(0.32, -0.28, 0.12);
     knife.add(kArm);
 
+    // ========================
+    // 4. HEAVY SNIPER (.50)
+    // ========================
+    const heavy = this.heavyGroup;
+    const goldAccentMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      roughness: 0.32,
+      metalness: 0.8,
+    });
+    const scopeLensMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide,
+    });
+
+    const hReceiver = new THREE.Mesh(new THREE.BoxGeometry(0.062, 0.074, 0.36), gunmetal);
+    hReceiver.position.set(0, 0.052, 0.03);
+    heavy.add(hReceiver);
+
+    const hChassisTrim = new THREE.Mesh(new THREE.BoxGeometry(0.066, 0.018, 0.38), goldAccentMat);
+    hChassisTrim.position.set(0, 0.024, 0.02);
+    heavy.add(hChassisTrim);
+
+    const hShroud = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.056, 0.34), polymer);
+    hShroud.position.set(0, 0.052, -0.32);
+    heavy.add(hShroud);
+
+    const hBarrelGeo = new THREE.CylinderGeometry(0.014, 0.017, 0.42, 10);
+    hBarrelGeo.rotateX(Math.PI / 2);
+    const hBarrel = new THREE.Mesh(hBarrelGeo, darkAlloy);
+    hBarrel.position.set(0, 0.056, -0.66);
+    heavy.add(hBarrel);
+
+    const hMuzzleBrake = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.034, 0.085), goldAccentMat);
+    hMuzzleBrake.position.set(0, 0.056, -0.89);
+    heavy.add(hMuzzleBrake);
+
+    // Heavy sniper scope centered at y = 0.155 for ADS alignment
+    const hScopeMount = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.038, 0.18), darkAlloy);
+    hScopeMount.position.set(0, 0.106, 0.01);
+    heavy.add(hScopeMount);
+
+    const hScopeTubeGeo = new THREE.CylinderGeometry(0.024, 0.022, 0.28, 12);
+    hScopeTubeGeo.rotateX(Math.PI / 2);
+    const hScopeTube = new THREE.Mesh(hScopeTubeGeo, darkAlloy);
+    hScopeTube.position.set(0, 0.155, -0.01);
+    heavy.add(hScopeTube);
+
+    const hScopeBellGeo = new THREE.CylinderGeometry(0.031, 0.024, 0.075, 12);
+    hScopeBellGeo.rotateX(Math.PI / 2);
+    const hScopeBell = new THREE.Mesh(hScopeBellGeo, gunmetal);
+    hScopeBell.position.set(0, 0.155, -0.16);
+    heavy.add(hScopeBell);
+
+    const hScopeLens = new THREE.Mesh(new THREE.CircleGeometry(0.026, 12), scopeLensMat);
+    hScopeLens.position.set(0, 0.155, -0.195);
+    heavy.add(hScopeLens);
+
+    const hScopeReticle = new THREE.Mesh(new THREE.SphereGeometry(0.0022, 8, 8), scopeLensMat);
+    hScopeReticle.position.set(0, 0.155, 0.06);
+    heavy.add(hScopeReticle);
+
+    // Folded bipod legs under shroud
+    for (const side of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 0.22, 6), darkAlloy);
+      leg.rotation.x = Math.PI / 2;
+      leg.position.set(side * 0.032, 0.015, -0.38);
+      heavy.add(leg);
+    }
+
+    const hStock = new THREE.Mesh(new THREE.BoxGeometry(0.048, 0.12, 0.24), polymer);
+    hStock.position.set(0, 0.03, 0.31);
+    heavy.add(hStock);
+
+    const hGrip = new THREE.Mesh(new THREE.BoxGeometry(0.038, 0.11, 0.048), polymer);
+    hGrip.position.set(0, -0.065, 0.14);
+    hGrip.rotation.x = 0.26;
+    heavy.add(hGrip);
+
+    this.heavyMagGroup.position.set(0, -0.02, 0.01);
+    const hMag = new THREE.Mesh(new THREE.BoxGeometry(0.036, 0.11, 0.085), darkAlloy);
+    hMag.position.set(0, -0.045, 0);
+    this.heavyMagGroup.add(hMag);
+    heavy.add(this.heavyMagGroup);
+
+    const hRightHand = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.068, 0.075), gloveMat);
+    hRightHand.position.set(0.012, -0.06, 0.145);
+    hRightHand.rotation.x = 0.24;
+    heavy.add(hRightHand);
+
+    const hRightArm = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.074, 0.24), sleeveMat);
+    hRightArm.position.set(0.065, -0.105, 0.29);
+    hRightArm.rotation.set(0.28, -0.26, 0.12);
+    heavy.add(hRightArm);
+
+    const hLeftHand = new THREE.Mesh(new THREE.BoxGeometry(0.064, 0.064, 0.092), gloveMat);
+    hLeftHand.position.set(-0.02, 0.02, -0.25);
+    hLeftHand.rotation.z = 0.2;
+    heavy.add(hLeftHand);
+
+    const hLeftArm = new THREE.Mesh(new THREE.BoxGeometry(0.072, 0.074, 0.36), sleeveMat);
+    hLeftArm.position.set(-0.135, -0.085, -0.04);
+    hLeftArm.rotation.set(-0.34, -0.45, -0.2);
+    heavy.add(hLeftArm);
+
+    this.heavyMuzzleTip.position.set(0, 0.056, -0.94);
+    heavy.add(this.heavyMuzzleTip);
+
+    this.heavyEjectionPort.position.set(0.038, 0.06, 0.02);
+    heavy.add(this.heavyEjectionPort);
+
     // Shared 3D star muzzle flash (repositioned to active firearm muzzle tip)
     const flashMat = new THREE.MeshBasicMaterial({
       color: 0xffd275,
@@ -530,9 +667,22 @@ export class WeaponSystem {
     this.rifleGroup.visible = this.activeId === 'rifle';
     this.pistolGroup.visible = this.activeId === 'pistol';
     this.knifeGroup.visible = this.activeId === 'knife';
+    this.heavyGroup.visible = this.activeId === 'heavy';
+  }
+
+  unlockHeavyWeapon(): void {
+    this.heavyUnlocked = true;
+    this.ammo.heavy.mag = WEAPON_CONFIGS.heavy.magSize;
+    this.ammo.heavy.reserve = WEAPON_CONFIGS.heavy.defaultReserve;
+    this.selectWeapon('heavy');
+  }
+
+  isHeavyUnlocked(): boolean {
+    return this.heavyUnlocked;
   }
 
   selectWeapon(id: WeaponId): void {
+    if (id === 'heavy' && !this.heavyUnlocked) return;
     if (id === this.activeId) return;
     this.activeId = id;
     this.isReloading = false;
@@ -544,6 +694,7 @@ export class WeaponSystem {
     this.muzzleLight.intensity = 0;
     this.rifleMagGroup.position.y = -0.025;
     this.pistolMagGroup.position.y = 0.02;
+    this.heavyMagGroup.position.y = -0.02;
     this.swapDip = 1.0;
     if (id === 'knife') {
       this.isAiming = false;
@@ -552,9 +703,12 @@ export class WeaponSystem {
   }
 
   cycleWeapon(step: number): void {
-    const idx = WEAPON_ORDER.indexOf(this.activeId);
-    const nextIdx = (idx + step + WEAPON_ORDER.length) % WEAPON_ORDER.length;
-    this.selectWeapon(WEAPON_ORDER[nextIdx]);
+    const available = this.heavyUnlocked
+      ? WEAPON_ORDER
+      : WEAPON_ORDER.filter((id) => id !== 'heavy');
+    const idx = available.indexOf(this.activeId);
+    const nextIdx = (idx + step + available.length) % available.length;
+    this.selectWeapon(available[nextIdx]);
   }
 
   setFiringHeld(held: boolean): void {
@@ -574,7 +728,7 @@ export class WeaponSystem {
   startReload(): void {
     const cfg = WEAPON_CONFIGS[this.activeId];
     if (cfg.isMelee || this.isReloading) return;
-    const slot = this.ammo[this.activeId as 'rifle' | 'pistol'];
+    const slot = this.ammo[this.activeId as 'rifle' | 'pistol' | 'heavy'];
     if (slot.mag >= cfg.magSize || slot.reserve <= 0) return;
     this.isReloading = true;
     this.reloadTimer = 0;
@@ -584,14 +738,18 @@ export class WeaponSystem {
   refillReserve(): void {
     this.ammo.rifle.reserve = WEAPON_CONFIGS.rifle.defaultReserve;
     this.ammo.pistol.reserve = WEAPON_CONFIGS.pistol.defaultReserve;
+    this.ammo.heavy.reserve = WEAPON_CONFIGS.heavy.defaultReserve;
   }
 
   reset(): void {
     this.activeId = 'rifle';
+    this.heavyUnlocked = false;
     this.ammo.rifle.mag = WEAPON_CONFIGS.rifle.magSize;
     this.ammo.rifle.reserve = WEAPON_CONFIGS.rifle.defaultReserve;
     this.ammo.pistol.mag = WEAPON_CONFIGS.pistol.magSize;
     this.ammo.pistol.reserve = WEAPON_CONFIGS.pistol.defaultReserve;
+    this.ammo.heavy.mag = WEAPON_CONFIGS.heavy.magSize;
+    this.ammo.heavy.reserve = WEAPON_CONFIGS.heavy.defaultReserve;
     this.fireCooldown = 0;
     this.emptyClickCooldown = 0;
     this.isFiringHeld = false;
@@ -613,6 +771,7 @@ export class WeaponSystem {
     this.muzzleLight.intensity = 0;
     this.rifleMagGroup.position.y = -0.025;
     this.pistolMagGroup.position.y = 0.02;
+    this.heavyMagGroup.position.y = -0.02;
     this.pistolSlideGroup.position.z = -0.025;
     this.applyWeaponVisibility();
     this.camera.fov = this.baseFov;
@@ -652,9 +811,10 @@ export class WeaponSystem {
         reserve: 0,
         isReloading: false,
         isAiming: false,
+        heavyUnlocked: this.heavyUnlocked,
       };
     }
-    const slot = this.ammo[this.activeId as 'rifle' | 'pistol'];
+    const slot = this.ammo[this.activeId as 'rifle' | 'pistol' | 'heavy'];
     return {
       id: this.activeId,
       name: cfg.name,
@@ -664,6 +824,7 @@ export class WeaponSystem {
       reserve: slot.reserve,
       isReloading: this.isReloading,
       isAiming: this.isAiming && !this.isReloading,
+      heavyUnlocked: this.heavyUnlocked,
     };
   }
 
@@ -736,7 +897,7 @@ export class WeaponSystem {
       return this.performKnifeSlash(cfg);
     }
 
-    const slot = this.ammo[this.activeId as 'rifle' | 'pistol'];
+    const slot = this.ammo[this.activeId as 'rifle' | 'pistol' | 'heavy'];
     if (slot.mag <= 0) {
       if (this.emptyClickCooldown <= 0) {
         this.audio.playEmptyClick();
@@ -760,29 +921,44 @@ export class WeaponSystem {
     if (this.activeId === 'pistol') {
       this.audio.playPistolShot();
       this.slideKick = 0.042;
+    } else if (this.activeId === 'heavy') {
+      this.audio.playHeavyShot();
     } else {
       this.audio.playShot();
     }
 
     // Recoil kick
     const adsScale = this.isAiming ? 0.55 : 1.0;
-    this.recoilZ = Math.min(this.recoilZ + cfg.recoilZ * adsScale, 0.12);
-    this.recoilPitch = Math.min(this.recoilPitch + cfg.recoilPitch * adsScale, 0.14);
+    this.recoilZ = Math.min(this.recoilZ + cfg.recoilZ * adsScale, 0.14);
+    this.recoilPitch = Math.min(this.recoilPitch + cfg.recoilPitch * adsScale, 0.16);
     this.recoilYaw += (Math.random() - 0.5) * 0.025 * adsScale;
 
     const pitchKick = cfg.camPitchKick * adsScale;
     const yawKick = (Math.random() - 0.5) * 0.006 * adsScale;
 
-    const muzzleAnchor = this.activeId === 'pistol' ? this.pistolMuzzleTip : this.rifleMuzzleTip;
-    const ejectAnchor = this.activeId === 'pistol' ? this.pistolEjectionPort : this.rifleEjectionPort;
+    const muzzleAnchor =
+      this.activeId === 'pistol'
+        ? this.pistolMuzzleTip
+        : this.activeId === 'heavy'
+          ? this.heavyMuzzleTip
+          : this.rifleMuzzleTip;
+    const ejectAnchor =
+      this.activeId === 'pistol'
+        ? this.pistolEjectionPort
+        : this.activeId === 'heavy'
+          ? this.heavyEjectionPort
+          : this.rifleEjectionPort;
 
     // Muzzle flash positioned at active firearm muzzle
     this.muzzleFlashTimer = 0.045;
     this.muzzleFlashGroup.position.copy(muzzleAnchor.position);
     this.muzzleFlashGroup.visible = true;
     this.muzzleFlashGroup.rotation.z = Math.random() * Math.PI * 2;
-    this.muzzleFlashGroup.scale.setScalar((this.activeId === 'pistol' ? 0.68 : 0.85) + Math.random() * 0.3);
-    this.muzzleLight.intensity = 3.0;
+    this.muzzleFlashGroup.scale.setScalar(
+      (this.activeId === 'pistol' ? 0.68 : this.activeId === 'heavy' ? 1.25 : 0.85) +
+        Math.random() * 0.3
+    );
+    this.muzzleLight.intensity = this.activeId === 'heavy' ? 4.5 : 3.0;
 
     this.spawnShellCasing(ejectAnchor);
 
@@ -844,20 +1020,30 @@ export class WeaponSystem {
       hitPoint = muzzleWorld.clone().addScaledVector(dir, cfg.range);
     }
 
-    this.spawnTracer(muzzleWorld, hitPoint);
+    this.spawnTracer(
+      muzzleWorld,
+      hitPoint,
+      this.activeId === 'heavy' ? 0x38bdf8 : 0xfff3b0,
+      this.activeId === 'heavy' ? 0.11 : 0.055
+    );
     return { fired: true, hitTarget, targetDestroyed, headshot, pitchKick, yawKick };
   }
 
-  private spawnTracer(start: THREE.Vector3, end: THREE.Vector3): void {
+  private spawnTracer(
+    start: THREE.Vector3,
+    end: THREE.Vector3,
+    colorHex = 0xfff3b0,
+    duration = 0.055
+  ): void {
     const geo = new THREE.BufferGeometry().setFromPoints([start, end]);
     const mat = new THREE.LineBasicMaterial({
-      color: 0xfff3b0,
+      color: colorHex,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.85,
     });
     const line = new THREE.Line(geo, mat);
     this.worldScene.add(line);
-    this.tracers.push({ line, life: 0.055, maxLife: 0.055 });
+    this.tracers.push({ line, life: duration, maxLife: duration });
   }
 
   private spawnShellCasing(port: THREE.Object3D): void {
@@ -937,8 +1123,14 @@ export class WeaponSystem {
       this.reloadTimer += dt;
       const t = Math.min(1, this.reloadTimer / cfg.reloadDuration);
 
-      const magGroup = this.activeId === 'pistol' ? this.pistolMagGroup : this.rifleMagGroup;
-      const restY = this.activeId === 'pistol' ? 0.02 : -0.025;
+      const magGroup =
+        this.activeId === 'pistol'
+          ? this.pistolMagGroup
+          : this.activeId === 'heavy'
+            ? this.heavyMagGroup
+            : this.rifleMagGroup;
+      const restY =
+        this.activeId === 'pistol' ? 0.02 : this.activeId === 'heavy' ? -0.02 : -0.025;
 
       if (t < 0.35) {
         const drop = t / 0.35;
@@ -951,7 +1143,7 @@ export class WeaponSystem {
       }
 
       if (this.reloadTimer >= cfg.reloadDuration) {
-        const slot = this.ammo[this.activeId as 'rifle' | 'pistol'];
+        const slot = this.ammo[this.activeId as 'rifle' | 'pistol' | 'heavy'];
         const needed = cfg.magSize - slot.mag;
         const transfer = Math.min(needed, slot.reserve);
         slot.mag += transfer;

@@ -10,6 +10,8 @@ export const WATER_LEVEL = 0;
 export const MAX_WALK_DEPTH = -0.65;
 export const SPAWN_X = 0;
 export const SPAWN_Z = 46;
+export const TOWER_X = 14;
+export const TOWER_Z = ISLAND2_CENTER_Z - 6;
 
 export type SurfaceType = 'water' | 'sand' | 'grass' | 'rock';
 
@@ -19,12 +21,39 @@ export interface Collider {
   radius: number;
 }
 
+export interface CoverWall {
+  x: number;
+  z: number;
+  y: number;
+  rotY: number;
+  halfWidth: number;
+  height: number;
+  halfDepth: number;
+}
+
 export interface IslandEnvironment {
   group: THREE.Group;
   colliders: Collider[];
+  coverWalls: CoverWall[];
   shootableEnvironment: THREE.Object3D[];
   setActiveIsland(id: IslandId): void;
   update(time: number): void;
+}
+
+export function pointHitsCoverWall(pos: THREE.Vector3, walls: CoverWall[]): boolean {
+  for (const w of walls) {
+    if (pos.y < w.y - 0.3 || pos.y > w.y + w.height) continue;
+    const dx = pos.x - w.x;
+    const dz = pos.z - w.z;
+    const cos = Math.cos(w.rotY);
+    const sin = Math.sin(w.rotY);
+    const lx = dx * cos - dz * sin;
+    const lz = dx * sin + dz * cos;
+    if (Math.abs(lx) <= w.halfWidth && Math.abs(lz) <= w.halfDepth) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function getIslandCenter(id: IslandId): { x: number; z: number } {
@@ -421,6 +450,7 @@ function buildRock(
 export function createIsland(scene: THREE.Scene): IslandEnvironment {
   const group = new THREE.Group();
   const colliders: Collider[] = [];
+  const coverWalls: CoverWall[] = [];
   const shootableEnvironment: THREE.Object3D[] = [];
   const rng = createSeededRandom(20261125);
 
@@ -592,6 +622,7 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     const tz = ISLAND2_CENTER_Z + Math.sin(angle) * dist;
 
     if (Math.abs(tx - ISLAND2_CENTER_X) < 7 && tz > ISLAND2_CENTER_Z + 32) continue;
+    if (Math.hypot(tx - TOWER_X, tz - TOWER_Z) < 6.5) continue;
     const ty = getTerrainHeight(tx, tz);
     if (ty < 0.85 || ty > 5.8) continue;
     if (getTerrainNormalY(tx, tz) < 0.82) continue;
@@ -623,6 +654,7 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     const rz = ISLAND2_CENTER_Z + Math.sin(angle) * dist;
 
     if (Math.abs(rx - ISLAND2_CENTER_X) < 7 && rz > ISLAND2_CENTER_Z + 32) continue;
+    if (Math.hypot(rx - TOWER_X, rz - TOWER_Z) < 6.5) continue;
     const ry = getTerrainHeight(rx, rz);
     const isShoreRock = ry >= -0.25 && ry <= 1.9;
     const isHighlandRock = ry >= 4.5 && ry <= 14.5;
@@ -665,11 +697,99 @@ export function createIsland(scene: THREE.Scene): IslandEnvironment {
     colliders.push({ x: cx, z: cz, radius: 0.95 });
   }
 
+  // Tactical low cover walls on both islands usable by both players and enemies
+  const wallBaseMat = new THREE.MeshStandardMaterial({ color: 0x8b867d, roughness: 0.92 });
+  const wallCapMat = new THREE.MeshStandardMaterial({ color: 0xb49f77, roughness: 0.88 });
+
+  const placeCoverWalls = (anchors: Array<[number, number, number]>): void => {
+    const width = 3.4;
+    const height = 1.35;
+    const depth = 0.65;
+
+    for (const [wx, wz, rotY] of anchors) {
+      const wy = getTerrainHeight(wx, wz);
+      if (wy < 0.85) continue;
+
+      const wallGroup = new THREE.Group();
+      wallGroup.position.set(wx, wy - 0.12, wz);
+      wallGroup.rotation.y = rotY;
+
+      const body = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), wallBaseMat);
+      body.position.y = height * 0.5;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      wallGroup.add(body);
+
+      const topTrim = new THREE.Mesh(
+        new THREE.BoxGeometry(width + 0.08, 0.18, depth + 0.12),
+        wallCapMat
+      );
+      topTrim.position.y = height + 0.06;
+      topTrim.castShadow = true;
+      topTrim.receiveShadow = true;
+      wallGroup.add(topTrim);
+
+      // End buttresses for visual polish
+      for (const side of [-1, 1]) {
+        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.28, height + 0.2, depth + 0.14), wallCapMat);
+        pillar.position.set(side * (width * 0.5 - 0.1), height * 0.52, 0);
+        pillar.castShadow = true;
+        pillar.receiveShadow = true;
+        wallGroup.add(pillar);
+      }
+
+      group.add(wallGroup);
+      shootableEnvironment.push(wallGroup);
+
+      coverWalls.push({
+        x: wx,
+        z: wz,
+        y: wy - 0.1,
+        rotY,
+        halfWidth: width * 0.5,
+        height: height + 0.15,
+        halfDepth: depth * 0.5 + 0.06,
+      });
+
+      const cos = Math.cos(rotY);
+      const sin = Math.sin(rotY);
+      for (const offset of [-1.05, 0, 1.05]) {
+        colliders.push({
+          x: wx + offset * cos,
+          z: wz - offset * sin,
+          radius: 0.55,
+        });
+      }
+    }
+  };
+
+  placeCoverWalls([
+    [-5.5, 34, 0.18],
+    [7.5, 31, -0.25],
+    [-16, 17, 0.65],
+    [18, 16, -0.58],
+    [-22, -7, 1.15],
+    [22, -10, -1.05],
+    [-9, -24, 0.3],
+    [10, -29, -0.35],
+  ]);
+
+  placeCoverWalls([
+    [-10, ISLAND2_CENTER_Z + 22, 0.22],
+    [9, ISLAND2_CENTER_Z + 19, -0.32],
+    [-19, ISLAND2_CENTER_Z + 4, 0.95],
+    [-1, ISLAND2_CENTER_Z + 2, 0.08],
+    [-16, ISLAND2_CENTER_Z - 17, -0.65],
+    [3, ISLAND2_CENTER_Z - 24, 0.35],
+    [22, ISLAND2_CENTER_Z + 9, -0.88],
+  ]);
+
   scene.add(group);
 
   return {
     group,
     colliders,
+    coverWalls,
     shootableEnvironment,
     setActiveIsland(id: IslandId) {
       const center = getIslandCenter(id);

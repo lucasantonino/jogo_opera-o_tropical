@@ -440,6 +440,48 @@ export class SoundEngine {
     noise.start(now, Math.random() * 0.6, 0.095);
   }
 
+  /** Deep booming heavy .50 sniper rifle shot. */
+  playHeavyShot(): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2600, now);
+    lp.frequency.exponentialRampToValueAtTime(180, now + 0.38);
+
+    const nGain = this.ctx.createGain();
+    nGain.gain.setValueAtTime(0.72, now);
+    nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+
+    noise.connect(lp);
+    lp.connect(nGain);
+    nGain.connect(this.masterGain);
+    noise.start(now, Math.random() * 0.4, 0.42);
+
+    const sub = this.ctx.createOscillator();
+    sub.type = 'sawtooth';
+    sub.frequency.setValueAtTime(110, now);
+    sub.frequency.exponentialRampToValueAtTime(28, now + 0.24);
+
+    const subFilter = this.ctx.createBiquadFilter();
+    subFilter.type = 'lowpass';
+    subFilter.frequency.value = 340;
+
+    const subGain = this.ctx.createGain();
+    subGain.gain.setValueAtTime(0.55, now);
+    subGain.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
+
+    sub.connect(subFilter);
+    subFilter.connect(subGain);
+    subGain.connect(this.masterGain);
+    sub.start(now);
+    sub.stop(now + 0.27);
+  }
+
   /** Gentle looping ocean surf ambience modulated by a slow LFO. */
   startAmbience(): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer || this.ambienceStarted) return;

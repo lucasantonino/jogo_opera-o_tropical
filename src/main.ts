@@ -7,6 +7,7 @@ import { createIsland } from './island';
 import { PlayerController } from './player';
 import { createTargets } from './targets';
 import { TouchControls } from './touchControls';
+import { createTowerSystem } from './tower';
 import { WeaponSystem } from './weapon';
 
 function requireEl<T extends HTMLElement>(id: string): T {
@@ -29,6 +30,7 @@ const restartBtn = requireEl<HTMLButtonElement>('restart-btn');
 const waveCounterEl = requireEl<HTMLSpanElement>('wave-counter');
 const enemyCounterEl = requireEl<HTMLSpanElement>('enemy-counter');
 const killCounterEl = requireEl<HTMLSpanElement>('kill-counter');
+const partsLabelEl = requireEl<HTMLSpanElement>('parts-label');
 const partsCounterEl = requireEl<HTMLSpanElement>('parts-counter');
 const islandBadgeEl = requireEl<HTMLSpanElement>('island-badge');
 const targetCounterEl = requireEl<HTMLSpanElement>('target-counter');
@@ -73,14 +75,18 @@ const island = createIsland(scene);
 const targets = createTargets(scene, island.colliders);
 const helicopter = createHelicopterSystem(scene, audio);
 const boat = createBoatSystem(scene, audio);
+const tower = createTowerSystem(scene, island.colliders, island.shootableEnvironment, audio);
 const enemies = createEnemySystem(
   scene,
   island.colliders,
   island.shootableEnvironment,
+  island.coverWalls,
   audio,
   helicopter
 );
 const player = new PlayerController(camera, island.colliders, audio);
+player.setExtraFloorResolver((x, z, curFootY) => tower.getPlatformFloorY(x, z, curFootY));
+
 const weapon = new WeaponSystem(
   camera,
   scene,
@@ -105,29 +111,59 @@ let touchModeEnabled = TouchControls.isTouchDevice();
 let touchModeManuallyToggled = false;
 let touchAdsActive = false;
 
-function tryBoardBoat(): void {
-  if (!isPlaying || gameOverShown) return;
+function isControlLocked(): boolean {
+  return boat.getState().isSailing || tower.getState().isClimbing;
+}
+
+function tryInteract(): void {
+  if (!isPlaying || gameOverShown || isControlLocked()) return;
   const pos = player.getPosition();
-  if (!boat.canBoard(pos)) return;
 
-  const targetIsland = boat.getState().currentIsland === 1 ? 2 : 1;
-  const started = boat.startVoyage((newIsland, landingPos) => {
-    player.setPose(landingPos, newIsland === 2 ? 0 : Math.PI, -0.04);
-    island.setActiveIsland(newIsland);
-    enemies.setActiveIsland(newIsland, landingPos);
-    showToast(
-      newIsland === 2
-        ? 'Você chegou à Ilha 2! Cuidado com os novos inimigos!'
-        : 'De volta à Ilha 1!',
-      3.0
-    );
-  });
+  if (boat.canBoard(pos)) {
+    const targetIsland = boat.getState().currentIsland === 1 ? 2 : 1;
+    const started = boat.startVoyage((newIsland, landingPos) => {
+      player.setPose(landingPos, newIsland === 2 ? 0 : Math.PI, -0.04);
+      island.setActiveIsland(newIsland);
+      enemies.setActiveIsland(newIsland, landingPos);
+      showToast(
+        newIsland === 2
+          ? 'Você chegou à Ilha 2! Explore a torre e colete as 5 peças da arma!'
+          : 'De volta à Ilha 1!',
+        3.2
+      );
+    });
 
-  if (started) {
+    if (started) {
+      weapon.setFiringHeld(false);
+      weapon.setAiming(false);
+      touchAdsActive = false;
+      showToast(`Navegando para a Ilha ${targetIsland}...`, 2.6);
+    }
+    return;
+  }
+
+  const towerAction = tower.getNearbyAction(pos);
+  if (!towerAction) return;
+
+  if (towerAction.type === 'climb_up') {
     weapon.setFiringHeld(false);
     weapon.setAiming(false);
     touchAdsActive = false;
-    showToast(`Navegando para a Ilha ${targetIsland}...`, 2.6);
+    tower.startClimb('up', (endPos, yaw) => {
+      player.setPose(endPos, yaw, -0.05);
+    });
+  } else if (towerAction.type === 'climb_down') {
+    weapon.setFiringHeld(false);
+    weapon.setAiming(false);
+    touchAdsActive = false;
+    tower.startClimb('down', (endPos, yaw) => {
+      player.setPose(endPos, yaw, -0.04);
+    });
+  } else if (towerAction.type === 'unlock_weapon') {
+    tower.unlockWeapon();
+    weapon.unlockHeavyWeapon();
+    audio.playPickup();
+    showToast('Rifle Pesado .50 desbloqueado e equipado! [4]', 3.2);
   }
 }
 
@@ -136,37 +172,37 @@ const touchControls = new TouchControls({
     player.setTouchMove(forward, strafe, sprint);
   },
   onLook: (dx, dy) => {
-    if (!isPlaying) return;
+    if (!isPlaying || isControlLocked()) return;
     const looked = player.handleTouchLook(dx, dy, weapon.getState().isAiming);
     weapon.addMouseSway(looked.dx, looked.dy);
   },
   onFireChange: (firing) => {
-    if (!isPlaying || boat.getState().isSailing) return;
+    if (!isPlaying || isControlLocked()) return;
     weapon.setFiringHeld(firing);
   },
   onAdsToggle: () => {
-    if (!isPlaying || boat.getState().isSailing) return;
+    if (!isPlaying || isControlLocked()) return;
     touchAdsActive = !touchAdsActive;
     weapon.setAiming(touchAdsActive);
     touchControls.setAdsActive(touchAdsActive);
   },
   onJump: () => {
-    if (!isPlaying || boat.getState().isSailing) return;
+    if (!isPlaying || isControlLocked()) return;
     player.triggerJump();
   },
   onReload: () => {
-    if (!isPlaying || boat.getState().isSailing) return;
+    if (!isPlaying || isControlLocked()) return;
     weapon.startReload();
   },
   onWeaponCycle: () => {
-    if (!isPlaying || boat.getState().isSailing) return;
+    if (!isPlaying || isControlLocked()) return;
     touchAdsActive = false;
     weapon.setAiming(false);
     weapon.cycleWeapon(1);
     touchControls.setAdsActive(false);
   },
   onInteract: () => {
-    tryBoardBoat();
+    tryInteract();
   },
   onToggleLandscape: () => {
     void toggleLandscapeMode();
@@ -393,6 +429,7 @@ function restartGame(): void {
   player.reset();
   weapon.reset();
   boat.reset();
+  tower.reset();
   enemies.reset();
   targets.resetAll();
   touchControls.reset();
@@ -458,7 +495,7 @@ document.addEventListener('pointerlockerror', () => {
 });
 
 window.addEventListener('mousemove', (e) => {
-  if (!isPlaying || touchModeEnabled || boat.getState().isSailing) return;
+  if (!isPlaying || touchModeEnabled || isControlLocked()) return;
   let moveX = e.movementX;
   let moveY = e.movementY;
   if (document.pointerLockElement !== renderer.domElement) {
@@ -474,7 +511,7 @@ window.addEventListener('mousemove', (e) => {
 });
 
 window.addEventListener('mousedown', (e) => {
-  if (!isPlaying || touchModeEnabled || boat.getState().isSailing) return;
+  if (!isPlaying || touchModeEnabled || isControlLocked()) return;
   if (e.button === 0) {
     weapon.setFiringHeld(true);
   } else if (e.button === 2) {
@@ -494,7 +531,7 @@ window.addEventListener('mouseup', (e) => {
 window.addEventListener(
   'wheel',
   (e) => {
-    if (!isPlaying || touchModeEnabled || boat.getState().isSailing) return;
+    if (!isPlaying || touchModeEnabled || isControlLocked()) return;
     if (Math.abs(e.deltaY) > 4) {
       weapon.cycleWeapon(e.deltaY > 0 ? 1 : -1);
     }
@@ -512,7 +549,7 @@ window.addEventListener('keydown', (e) => {
     pauseGame();
     return;
   }
-  if (boat.getState().isSailing) return;
+  if (isControlLocked()) return;
 
   player.handleKeyDown(e.code);
   if (e.code === 'KeyR') {
@@ -528,10 +565,12 @@ window.addEventListener('keydown', (e) => {
     weapon.selectWeapon('pistol');
   } else if (e.code === 'Digit3') {
     weapon.selectWeapon('knife');
+  } else if (e.code === 'Digit4') {
+    weapon.selectWeapon('heavy');
   } else if (e.code === 'KeyQ') {
     weapon.cycleWeapon(1);
   } else if (e.code === 'KeyE') {
-    tryBoardBoat();
+    tryInteract();
   }
 });
 
@@ -592,19 +631,50 @@ function updateHud(
   killCounterEl.textContent = String(enemyProgress.kills);
 
   const boatState = boat.getState();
-  partsCounterEl.textContent = `${boatState.partsCollected} / ${boatState.partsRequired}`;
-  partsCounterEl.classList.toggle('parts-ready', boatState.isRepaired);
+  const towerState = tower.getState();
   islandBadgeEl.textContent = String(boatState.currentIsland);
 
-  if (boatState.nearbyPrompt && isPlaying && !boatState.isSailing) {
-    interactPromptEl.textContent = boatState.nearbyPrompt;
-    interactPromptEl.classList.toggle('locked', !boatState.isRepaired);
-    interactPromptEl.classList.remove('hidden');
+  if (boatState.currentIsland === 2 && !towerState.weaponUnlocked) {
+    partsLabelEl.textContent = 'TORRE';
+    partsCounterEl.textContent = `${towerState.partsCollected} / ${towerState.partsRequired}`;
+    partsCounterEl.classList.toggle('parts-ready', towerState.partsCollected >= towerState.partsRequired);
+  } else {
+    partsLabelEl.textContent = 'LANCHA';
+    partsCounterEl.textContent = `${boatState.partsCollected} / ${boatState.partsRequired}`;
+    partsCounterEl.classList.toggle('parts-ready', boatState.isRepaired);
+  }
+
+  const pos = player.getPosition();
+  const canBoardBoat = boat.canBoard(pos);
+  const towerAction = !canBoardBoat ? tower.getNearbyAction(pos) : null;
+
+  if (isPlaying && !isControlLocked()) {
+    if (boatState.nearbyPrompt) {
+      interactPromptEl.textContent = boatState.nearbyPrompt;
+      interactPromptEl.classList.toggle('locked', !boatState.isRepaired);
+      interactPromptEl.classList.remove('hidden');
+    } else if (towerAction) {
+      interactPromptEl.textContent = towerAction.prompt;
+      interactPromptEl.classList.toggle('locked', towerAction.type === 'locked_weapon');
+      interactPromptEl.classList.remove('hidden');
+    } else {
+      interactPromptEl.classList.add('hidden');
+    }
   } else {
     interactPromptEl.classList.add('hidden');
   }
 
-  touchControls.setInteractVisible(isPlaying && boat.canBoard(player.getPosition()));
+  if (isPlaying && !isControlLocked()) {
+    if (canBoardBoat) {
+      touchControls.setInteractVisible(true, 'LANCHA');
+    } else if (towerAction?.touchLabel) {
+      touchControls.setInteractVisible(true, towerAction.touchLabel);
+    } else {
+      touchControls.setInteractVisible(false);
+    }
+  } else {
+    touchControls.setInteractVisible(false);
+  }
 
   const health = player.getHealth();
   const hpPercent = Math.max(0, Math.min(100, (health.current / health.max) * 100));
@@ -631,10 +701,17 @@ function updateHud(
   ammoMagEl.classList.toggle('low-ammo', !wState.isMelee && wState.mag <= Math.ceil(wState.magSize * 0.25));
 
   for (const el of weaponSlotEls) {
+    if (el.dataset.weapon === 'heavy') {
+      el.classList.toggle('hidden', !wState.heavyUnlocked);
+    }
     el.classList.toggle('active', el.dataset.weapon === wState.id);
   }
 
-  const needReload = !wState.isMelee && !isReloading && wState.mag <= Math.ceil(wState.magSize * 0.25) && wState.reserve > 0;
+  const needReload =
+    !wState.isMelee &&
+    !isReloading &&
+    wState.mag <= Math.ceil(wState.magSize * 0.25) &&
+    wState.reserve > 0;
   reloadPromptEl.classList.toggle('hidden', !needReload);
 
   crosshairEl.classList.toggle('aiming', isAiming);
@@ -679,16 +756,19 @@ function animate(): void {
   }
 
   const sailingPose = boat.getVoyagePose();
+  const climbPose = tower.getClimbPose();
   if (sailingPose) {
     player.setPose(sailingPose.position, sailingPose.yaw, sailingPose.pitch);
+  } else if (climbPose) {
+    player.setPose(climbPose.position, climbPose.yaw, climbPose.pitch);
   }
 
   const weaponState = weapon.getState();
-  const isSailing = sailingPose !== null;
-  const playerStatus = player.update(dt, isPlaying && !isSailing, weaponState.isAiming);
+  const lockedMove = sailingPose !== null || climbPose !== null;
+  const playerStatus = player.update(dt, isPlaying && !lockedMove, weaponState.isAiming);
   const shot = weapon.update(
     dt,
-    isPlaying && !isSailing,
+    isPlaying && !lockedMove,
     playerStatus.speedRatio,
     playerStatus.isSprinting
   );
@@ -704,17 +784,33 @@ function animate(): void {
   const playerPos = player.getPosition();
   helicopter.update(dt, isPlaying, playerPos);
 
-  const pickup = boat.update(dt, isPlaying, playerPos);
-  if (pickup.collected) {
+  const boatPickup = boat.update(dt, isPlaying, playerPos);
+  if (boatPickup.collected) {
     const bState = boat.getState();
     if (bState.isRepaired) {
       showToast(
-        `${pickup.partName} coletado (5/5)! Lancha desbloqueada na praia norte!`,
+        `${boatPickup.partName} coletado (5/5)! Lancha desbloqueada na praia norte!`,
         3.5
       );
     } else {
       showToast(
-        `Peça coletada: ${pickup.partName} (${bState.partsCollected}/${bState.partsRequired})`,
+        `Peça da lancha: ${boatPickup.partName} (${bState.partsCollected}/${bState.partsRequired})`,
+        2.4
+      );
+    }
+  }
+
+  const towerPickup = tower.update(dt, isPlaying, playerPos);
+  if (towerPickup.collected) {
+    const tState = tower.getState();
+    if (tState.partsCollected >= tState.partsRequired) {
+      showToast(
+        `${towerPickup.partName} coletado (5/5)! Suba na torre da Ilha 2 para pegar o Rifle .50!`,
+        3.6
+      );
+    } else {
+      showToast(
+        `Peça da arma: ${towerPickup.partName} (${tState.partsCollected}/${tState.partsRequired})`,
         2.4
       );
     }
@@ -722,7 +818,7 @@ function animate(): void {
 
   const enemyStep = enemies.update(
     dt,
-    isPlaying && !isSailing,
+    isPlaying && !lockedMove,
     camera,
     playerPos,
     (damage) => {
@@ -738,10 +834,27 @@ function animate(): void {
     weapon.refillReserve();
 
     const bState = boat.getState();
-    if (bState.partsCollected + bState.activeDrops < bState.partsRequired && enemyStep.lastKillPos) {
+    const tState = tower.getState();
+
+    if (
+      bState.currentIsland === 1 &&
+      bState.partsCollected + bState.activeDrops < bState.partsRequired &&
+      enemyStep.lastKillPos
+    ) {
       boat.spawnPartDrop(enemyStep.lastKillPos);
       showToast(
         `Onda ${enemyStep.clearedWave} limpa! +25 VIDA — Último inimigo dropou uma peça da lancha!`,
+        3.2
+      );
+    } else if (
+      bState.currentIsland === 2 &&
+      !tState.weaponUnlocked &&
+      tState.partsCollected + tState.activeDrops < tState.partsRequired &&
+      enemyStep.lastKillPos
+    ) {
+      tower.spawnWeaponPartDrop(enemyStep.lastKillPos);
+      showToast(
+        `Onda ${enemyStep.clearedWave} limpa! +25 VIDA — Último inimigo dropou uma peça da arma da torre!`,
         3.2
       );
     } else {

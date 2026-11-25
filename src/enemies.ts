@@ -3,12 +3,14 @@ import { SoundEngine } from './audio';
 import { HelicopterSystem } from './helicopter';
 import {
   Collider,
+  CoverWall,
   getIslandCenter,
   getTerrainHeight,
   ISLAND_RADIUS,
   ISLAND2_RADIUS,
   IslandId,
   MAX_WALK_DEPTH,
+  pointHitsCoverWall,
   SPAWN_X,
   SPAWN_Z,
 } from './island';
@@ -61,6 +63,10 @@ interface EnemyUnit {
   burstShotTimer: number;
   hasLos: boolean;
   losCheckTimer: number;
+  coverWall: CoverWall | null;
+  coverTimer: number;
+  isCrouching: boolean;
+  crouchOffset: number;
 }
 
 interface EnemyBolt {
@@ -123,6 +129,7 @@ export function createEnemySystem(
   scene: THREE.Scene,
   colliders: Collider[],
   environmentObjects: THREE.Object3D[],
+  coverWalls: CoverWall[],
   audio: SoundEngine,
   helicopter: HelicopterSystem
 ): EnemySystem {
@@ -352,6 +359,42 @@ export function createEnemySystem(
       burstShotTimer: 0,
       hasLos: false,
       losCheckTimer: Math.random() * 0.25,
+      coverWall: null,
+      coverTimer: 0,
+      isCrouching: false,
+      crouchOffset: 0,
+    };
+  }
+
+  function findNearbyCover(ex: number, ez: number, playerPos: THREE.Vector3): CoverWall | null {
+    let best: CoverWall | null = null;
+    let bestDist = 14;
+    for (const w of coverWalls) {
+      const d = Math.hypot(w.x - ex, w.z - ez);
+      if (d > bestDist) continue;
+      // Only consider cover between or reasonably near player engagement range
+      const dToPlayer = Math.hypot(w.x - playerPos.x, w.z - playerPos.z);
+      if (dToPlayer < 6 || dToPlayer > 46) continue;
+      bestDist = d;
+      best = w;
+    }
+    return best;
+  }
+
+  function getCoverSpot(wall: CoverWall, playerPos: THREE.Vector3, enemyId: number): { x: number; z: number } {
+    // Wall normal axis in world space (local Z rotated by rotY)
+    const nx = Math.sin(wall.rotY);
+    const nz = Math.cos(wall.rotY);
+    const toPlayerX = playerPos.x - wall.x;
+    const toPlayerZ = playerPos.z - wall.z;
+    const sideSign = toPlayerX * nx + toPlayerZ * nz >= 0 ? -1 : 1;
+
+    const lateral = ((enemyId % 3) - 1) * 0.85;
+    const tx = Math.cos(wall.rotY);
+    const tz = -Math.sin(wall.rotY);
+    return {
+      x: wall.x + nx * sideSign * (wall.halfDepth + 0.88) + tx * lateral,
+      z: wall.z + nz * sideSign * (wall.halfDepth + 0.88) + tz * lateral,
     };
   }
 
@@ -375,8 +418,35 @@ export function createEnemySystem(
     pendingDrops = totalInWave;
     lastKillPos = null;
 
-    const dropPt = findDropZone(playerPos);
-    helicopter.dispatchDrop(new THREE.Vector3(dropPt.x, dropPt.y, dropPt.z), totalInWave, (chopperPos) => {
+    // +1 additional helicopter every 5 waves (1-4 -> 1, 5-9 -> 2, 10-14 -> 3, 15+ -> 4)
+    const chopperCount = Math.min(4, 1 + Math.floor(waveNum / 5));
+    const orders: Array<{ dropPos: THREE.Vector3; count: number }> = [];
+    const baseCount = Math.floor(totalInWave / chopperCount);
+    const remainder = totalInWave % chopperCount;
+
+    for (let c = 0; c < chopperCount; c++) {
+      const count = baseCount + (c < remainder ? 1 : 0);
+      if (count <= 0) continue;
+
+      let chosen = findDropZone(playerPos);
+      // Try picking distinct drop zones across helicopters
+      for (let retry = 0; retry < 8; retry++) {
+        const candidate = findDropZone(playerPos);
+        const farEnough = orders.every(
+          (o) => Math.hypot(candidate.x - o.dropPos.x, candidate.z - o.dropPos.z) >= 12
+        );
+        if (farEnough) {
+          chosen = candidate;
+          break;
+        }
+      }
+      orders.push({
+        dropPos: new THREE.Vector3(chosen.x, chosen.y, chosen.z),
+        count,
+      });
+    }
+
+    helicopter.dispatchWaveDrops(orders, (chopperPos) => {
       pendingDrops = Math.max(0, pendingDrops - 1);
       const unit = buildEnemyUnit(chopperPos.x, chopperPos.y, chopperPos.z, true);
       enemies.push(unit);
@@ -445,12 +515,19 @@ export function createEnemySystem(
         mat.emissiveIntensity = 0.85;
       }
 
-      // Small knockback away from shot impact
+      // Small knockback away from shot impact and seek nearby cover if wounded
       const pushDir = enemy.root.position.clone().sub(point);
       pushDir.y = 0;
       if (pushDir.lengthSq() > 0.0001) {
         pushDir.normalize();
         enemy.knockbackVel.addScaledVector(pushDir, headshot ? 4.2 : 2.2);
+      }
+      if (!enemy.coverWall && !enemy.dead) {
+        const nearby = findNearbyCover(enemy.root.position.x, enemy.root.position.z, point);
+        if (nearby) {
+          enemy.coverWall = nearby;
+          enemy.coverTimer = 1.6 + Math.random() * 0.8;
+        }
       }
 
       // Update overhead HP bar
@@ -547,8 +624,11 @@ export function createEnemySystem(
         b.pos.addScaledVector(b.vel, dt);
         b.mesh.position.copy(b.pos);
 
-        // Terrain collision
-        if (b.pos.y <= getTerrainHeight(b.pos.x, b.pos.z)) {
+        // Terrain & cover-wall collision
+        if (
+          b.pos.y <= getTerrainHeight(b.pos.x, b.pos.z) ||
+          pointHitsCoverWall(b.pos, coverWalls)
+        ) {
           group.remove(b.mesh);
           bolts.splice(i, 1);
           continue;
@@ -651,11 +731,46 @@ export function createEnemySystem(
         const perpX = -dirZ * e.strafeDir;
         const perpZ = dirX * e.strafeDir;
 
+        // Cover-seeking & peek-fire state at medium combat range
+        if (!e.coverWall && dist >= 10 && dist <= 34 && Math.random() < dt * 0.35) {
+          const wall = findNearbyCover(ex, ez, playerPos);
+          if (wall) {
+            e.coverWall = wall;
+            e.coverTimer = 2.6 + Math.random() * 1.4;
+          }
+        }
+
         let moveX = 0;
         let moveZ = 0;
         let moveSpeed = 0;
+        e.isCrouching = false;
 
-        if (dist > 24) {
+        if (e.coverWall) {
+          e.coverTimer -= dt;
+          const coverSpot = getCoverSpot(e.coverWall, playerPos, e.id);
+          const cdx = coverSpot.x - ex;
+          const cdz = coverSpot.z - ez;
+          const cDist = Math.hypot(cdx, cdz);
+
+          if (cDist > 0.85) {
+            moveX = cdx / cDist;
+            moveZ = cdz / cDist;
+            moveSpeed = 3.8;
+          } else if (e.burstRemaining <= 0 && e.burstCooldown > 0.35) {
+            // Duck behind the cover wall between bursts
+            e.isCrouching = true;
+            moveSpeed = 0;
+          } else {
+            // Peek slightly sideways to shoot
+            moveX = perpX * 0.65;
+            moveZ = perpZ * 0.65;
+            moveSpeed = 1.6;
+          }
+
+          if (e.coverTimer <= 0 || dist < 7 || dist > 42) {
+            e.coverWall = null;
+          }
+        } else if (dist > 24) {
           moveX = dirX + perpX * 0.25;
           moveZ = dirZ + perpZ * 0.25;
           moveSpeed = 3.9;
@@ -668,6 +783,10 @@ export function createEnemySystem(
           moveZ = -dirZ * 0.75 + perpZ * 0.65;
           moveSpeed = 2.4;
         }
+
+        const targetCrouch = e.isCrouching ? -0.38 : 0;
+        e.crouchOffset = THREE.MathUtils.lerp(e.crouchOffset, targetCrouch, Math.min(1, dt * 10));
+        e.bodyGroup.position.y = e.crouchOffset;
 
         const mLen = Math.hypot(moveX, moveZ);
         if (mLen > 0.001) {

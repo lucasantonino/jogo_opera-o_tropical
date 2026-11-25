@@ -966,6 +966,10 @@ body {
   color: #ffffff;
 }
 
+.weapon-slot.hidden {
+  display: none;
+}
+
 .ammo-readout.melee-mode .ammo-sep,
 .ammo-readout.melee-mode #ammo-reserve {
   display: none;

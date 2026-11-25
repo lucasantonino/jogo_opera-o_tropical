@@ -69,8 +69,11 @@ export class TouchControls {
     this.btnAds.classList.toggle('active', active);
   }
 
-  setInteractVisible(visible: boolean): void {
+  setInteractVisible(visible: boolean, label?: string): void {
     this.btnInteract.classList.toggle('hidden', !visible);
+    if (label) {
+      this.btnInteract.textContent = label;
+    }
   }
 
   setLandscapeActive(active: boolean): void {

@@ -60,6 +60,7 @@ export class PlayerController {
   private readonly forward = new THREE.Vector3();
   private readonly right = new THREE.Vector3();
   private readonly moveDir = new THREE.Vector3();
+  private extraFloorResolver: ((x: number, z: number, curFootY: number) => number | null) | null = null;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -186,6 +187,10 @@ export class PlayerController {
     this.syncCamera();
   }
 
+  setExtraFloorResolver(fn: (x: number, z: number, curFootY: number) => number | null): void {
+    this.extraFloorResolver = fn;
+  }
+
   setPose(position: THREE.Vector3, yaw: number, pitch: number): void {
     this.position.copy(position);
     this.yaw = yaw;
@@ -305,7 +310,11 @@ export class PlayerController {
     this.verticalVel += this.gravity * dt;
     this.position.y += this.verticalVel * dt;
 
-    const newGroundY = getTerrainHeight(this.position.x, this.position.z);
+    const terrainGroundY = getTerrainHeight(this.position.x, this.position.z);
+    const curFootY = this.position.y - this.eyeHeight;
+    const extraFloorY =
+      this.extraFloorResolver?.(this.position.x, this.position.z, curFootY) ?? null;
+    const newGroundY = extraFloorY !== null ? Math.max(terrainGroundY, extraFloorY) : terrainGroundY;
     const minEyeY = newGroundY + this.eyeHeight;
     if (this.position.y <= minEyeY) {
       this.position.y = minEyeY;
@@ -323,7 +332,8 @@ export class PlayerController {
       const stepStride = wantSprint ? 2.65 : 2.15;
       if (this.stepDistance >= stepStride) {
         this.stepDistance = 0;
-        this.audio.playFootstep(getSurfaceType(this.position.x, this.position.z));
+        const stepSurface = extraFloorY !== null ? 'rock' : getSurfaceType(this.position.x, this.position.z);
+        this.audio.playFootstep(stepSurface);
       }
     }
 
@@ -334,7 +344,7 @@ export class PlayerController {
       speedRatio,
       isSprinting: wantSprint && hasMove,
       isGrounded: this.isGrounded,
-      inWater: newGroundY < WATER_LEVEL,
+      inWater: terrainGroundY < WATER_LEVEL && extraFloorY === null,
       surface,
     };
   }
