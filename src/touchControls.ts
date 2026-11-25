@@ -7,6 +7,7 @@ export interface TouchControlsCallbacks {
   onReload: () => void;
   onWeaponCycle: () => void;
   onInteract: () => void;
+  onToggleLandscape: () => void;
   onPause: () => void;
 }
 
@@ -28,6 +29,7 @@ export class TouchControls {
   private readonly btnReload = getEl<HTMLButtonElement>('btn-reload');
   private readonly btnWeapon = getEl<HTMLButtonElement>('btn-weapon');
   private readonly btnInteract = getEl<HTMLButtonElement>('btn-interact');
+  private readonly btnLandscape = getEl<HTMLButtonElement>('btn-landscape');
   private readonly btnPause = getEl<HTMLButtonElement>('btn-pause');
 
   private readonly callbacks: TouchControlsCallbacks;
@@ -69,6 +71,10 @@ export class TouchControls {
 
   setInteractVisible(visible: boolean): void {
     this.btnInteract.classList.toggle('hidden', !visible);
+  }
+
+  setLandscapeActive(active: boolean): void {
+    this.btnLandscape.classList.toggle('active', active);
   }
 
   reset(): void {
@@ -267,6 +273,12 @@ export class TouchControls {
       e.preventDefault();
       e.stopPropagation();
       this.callbacks.onInteract();
+    });
+
+    this.btnLandscape.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.callbacks.onToggleLandscape();
     });
 
     this.btnPause.addEventListener('pointerdown', (e) => {

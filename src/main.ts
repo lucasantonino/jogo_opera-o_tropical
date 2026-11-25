@@ -20,6 +20,7 @@ const damageVignetteEl = requireEl<HTMLDivElement>('damage-vignette');
 const bloodOverlayEl = requireEl<HTMLDivElement>('blood-overlay');
 const overlayEl = requireEl<HTMLDivElement>('overlay');
 const touchModeBtn = requireEl<HTMLButtonElement>('touch-mode-btn');
+const landscapeBtn = requireEl<HTMLButtonElement>('landscape-btn');
 const playBtn = requireEl<HTMLButtonElement>('play-btn');
 const gameoverOverlayEl = requireEl<HTMLDivElement>('gameover-overlay');
 const gameoverWaveEl = requireEl<HTMLSpanElement>('gameover-wave');
@@ -167,10 +168,99 @@ const touchControls = new TouchControls({
   onInteract: () => {
     tryBoardBoat();
   },
+  onToggleLandscape: () => {
+    void toggleLandscapeMode();
+  },
   onPause: () => {
     pauseGame();
   },
 });
+
+interface WebkitDocument extends Document {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+}
+
+interface WebkitElement extends HTMLElement {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+}
+
+interface LockableOrientation extends ScreenOrientation {
+  lock?: (
+    orientation: 'landscape' | 'landscape-primary' | 'landscape-secondary' | 'any'
+  ) => Promise<void>;
+}
+
+function isFullscreen(): boolean {
+  const doc = document as WebkitDocument;
+  return Boolean(document.fullscreenElement || doc.webkitFullscreenElement);
+}
+
+function syncLandscapeUi(): void {
+  const fsActive = isFullscreen();
+  const isLandscapeViewport = window.innerWidth > window.innerHeight;
+  landscapeBtn.classList.toggle('active', fsActive);
+  landscapeBtn.textContent = fsActive
+    ? 'Modo Horizontal: ATIVADO'
+    : isLandscapeViewport
+      ? 'Modo Horizontal: TELA CHEIA'
+      : 'Modo Horizontal: GIRAR / TELA CHEIA';
+  touchControls.setLandscapeActive(fsActive);
+}
+
+async function toggleLandscapeMode(): Promise<void> {
+  const doc = document as WebkitDocument;
+  const el = document.documentElement as WebkitElement;
+  const orientation = screen.orientation as LockableOrientation | undefined;
+
+  if (!isFullscreen()) {
+    if (!touchModeManuallyToggled && TouchControls.isTouchDevice()) {
+      touchModeEnabled = true;
+      syncTouchModeUi();
+    }
+    try {
+      if (el.requestFullscreen) {
+        await el.requestFullscreen();
+      } else if (el.webkitRequestFullscreen) {
+        await el.webkitRequestFullscreen();
+      }
+    } catch {
+      // Fullscreen may be blocked by browser/webview policy
+    }
+
+    let locked = false;
+    try {
+      if (orientation?.lock) {
+        await orientation.lock('landscape');
+        locked = true;
+      }
+    } catch {
+      // Orientation lock unsupported (e.g. iOS Safari or desktop)
+    }
+
+    if (!locked && window.innerHeight > window.innerWidth) {
+      showToast('Gire o celular para a horizontal para melhor visualização!', 2.8);
+    }
+  } else {
+    try {
+      orientation?.unlock?.();
+    } catch {
+      // Ignore unlock error
+    }
+    try {
+      if (document.exitFullscreen) {
+        await document.exitFullscreen();
+      } else if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
+      }
+    } catch {
+      // Ignore exit error
+    }
+  }
+
+  syncLandscapeUi();
+  handleResize();
+}
 
 function syncTouchModeUi(): void {
   document.body.classList.toggle('touch-active', touchModeEnabled);
@@ -182,6 +272,7 @@ function syncTouchModeUi(): void {
 }
 
 syncTouchModeUi();
+syncLandscapeUi();
 
 function showToast(message: string, duration = 2.4): void {
   toastEl.textContent = message;
@@ -312,6 +403,10 @@ touchModeBtn.addEventListener('click', () => {
   touchModeEnabled = !touchModeEnabled;
   touchModeManuallyToggled = true;
   syncTouchModeUi();
+});
+
+landscapeBtn.addEventListener('click', () => {
+  void toggleLandscapeMode();
 });
 
 window.addEventListener(
@@ -452,10 +547,25 @@ window.addEventListener('blur', () => {
   touchControls.reset();
 });
 
-window.addEventListener('resize', () => {
+function handleResize(): void {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  syncLandscapeUi();
+}
+
+window.addEventListener('resize', handleResize);
+window.addEventListener('orientationchange', () => {
+  handleResize();
+  window.setTimeout(handleResize, 180);
+});
+document.addEventListener('fullscreenchange', () => {
+  handleResize();
+  window.setTimeout(handleResize, 180);
+});
+document.addEventListener('webkitfullscreenchange', () => {
+  handleResize();
+  window.setTimeout(handleResize, 180);
 });
 
 // Main loop
