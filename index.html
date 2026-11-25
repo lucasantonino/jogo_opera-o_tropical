@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ilha FPS</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="canvas-container"></div>
+
+      <div id="hud" aria-hidden="true">
+        <div id="hud-top-left">
+          <div class="hud-badge">
+            <span class="hud-label">ALVOS</span>
+            <span id="target-counter">0 / 12</span>
+          </div>
+          <div id="status-indicator" class="status-pill hidden"></div>
+        </div>
+
+        <div id="toast" class="toast hidden"></div>
+
+        <div id="crosshair">
+          <span class="ch-bar ch-top"></span>
+          <span class="ch-bar ch-bottom"></span>
+          <span class="ch-bar ch-left"></span>
+          <span class="ch-bar ch-right"></span>
+          <span class="ch-dot"></span>
+        </div>
+
+        <div id="hitmarker">
+          <span class="hm-line hm-tl"></span>
+          <span class="hm-line hm-tr"></span>
+          <span class="hm-line hm-bl"></span>
+          <span class="hm-line hm-br"></span>
+        </div>
+
+        <div id="hud-bottom-right">
+          <div id="reload-prompt" class="reload-prompt hidden">[R] Recarregar</div>
+          <div class="weapon-panel">
+            <div class="weapon-name">CARABINA M4</div>
+            <div class="ammo-readout">
+              <span id="ammo-mag">30</span>
+              <span class="ammo-sep">/</span>
+              <span id="ammo-reserve">120</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="overlay" class="visible">
+        <div class="overlay-card">
+          <div class="overlay-eyebrow">OPERAÇÃO TROPICAL</div>
+          <h1 class="overlay-title">ILHA</h1>
+          <p class="overlay-subtitle">Explore a ilha e acerte todos os alvos táticos.</p>
+
+          <div class="controls-grid">
+            <div class="control-item"><kbd>W A S D</kbd><span>Mover</span></div>
+            <div class="control-item"><kbd>Shift</kbd><span>Correr</span></div>
+            <div class="control-item"><kbd>Espaço</kbd><span>Pular</span></div>
+            <div class="control-item"><kbd>Mouse</kbd><span>Olhar</span></div>
+            <div class="control-item"><kbd>Botão Esq.</kbd><span>Atirar</span></div>
+            <div class="control-item"><kbd>Botão Dir.</kbd><span>Mirar</span></div>
+            <div class="control-item"><kbd>R</kbd><span>Recarregar</span></div>
+            <div class="control-item"><kbd>ESC</kbd><span>Pausar</span></div>
+          </div>
+
+          <button id="play-btn" type="button">JOGAR</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

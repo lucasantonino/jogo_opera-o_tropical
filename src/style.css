@@ -1,0 +1,449 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #87ceeb;
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #f8fafc;
+}
+
+#app,
+#canvas-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#canvas-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* HUD */
+#hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.hidden {
+  opacity: 0 !important;
+  visibility: hidden;
+}
+
+/* Top-left target & status */
+#hud-top-left {
+  position: absolute;
+  top: 24px;
+  left: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hud-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+.hud-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+#target-counter {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 5px 11px;
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #bae6fd;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  transition: opacity 0.18s ease;
+}
+
+.status-pill.reloading {
+  color: #fde68a;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+/* Toast notification */
+.toast {
+  position: absolute;
+  top: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 20px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(74, 222, 128, 0.45);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #bbf7d0;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+/* Crosshair */
+#crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.12s ease;
+}
+
+.ch-dot {
+  position: absolute;
+  top: -1.5px;
+  left: -1.5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.75);
+}
+
+.ch-bar {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.75);
+  transition: transform 0.08s ease-out, opacity 0.12s ease;
+}
+
+.ch-top {
+  width: 2px;
+  height: 8px;
+  left: -1px;
+  top: -14px;
+}
+
+.ch-bottom {
+  width: 2px;
+  height: 8px;
+  left: -1px;
+  top: 6px;
+}
+
+.ch-left {
+  width: 8px;
+  height: 2px;
+  top: -1px;
+  left: -14px;
+}
+
+.ch-right {
+  width: 8px;
+  height: 2px;
+  top: -1px;
+  left: 6px;
+}
+
+#crosshair.spread .ch-top {
+  transform: translateY(-6px);
+}
+#crosshair.spread .ch-bottom {
+  transform: translateY(6px);
+}
+#crosshair.spread .ch-left {
+  transform: translateX(-6px);
+}
+#crosshair.spread .ch-right {
+  transform: translateX(6px);
+}
+
+#crosshair.aiming {
+  opacity: 0;
+}
+
+#crosshair.reloading {
+  opacity: 0.25;
+}
+
+/* Hitmarker */
+#hitmarker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 24px;
+  transform: translate(-50%, -50%) scale(0.85);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#hitmarker.hit {
+  animation: hitmarker-flash 0.18s ease-out forwards;
+}
+
+#hitmarker.kill .hm-line {
+  background: #f87171;
+  box-shadow: 0 0 6px rgba(248, 113, 113, 0.85);
+}
+
+.hm-line {
+  position: absolute;
+  width: 7px;
+  height: 2px;
+  background: #ffffff;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+  border-radius: 1px;
+}
+
+.hm-tl {
+  top: 4px;
+  left: 2px;
+  transform: rotate(45deg);
+}
+
+.hm-tr {
+  top: 4px;
+  right: 2px;
+  transform: rotate(-45deg);
+}
+
+.hm-bl {
+  bottom: 4px;
+  left: 2px;
+  transform: rotate(-45deg);
+}
+
+.hm-br {
+  bottom: 4px;
+  right: 2px;
+  transform: rotate(45deg);
+}
+
+@keyframes hitmarker-flash {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.18);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.85);
+  }
+}
+
+/* Bottom-right weapon & ammo */
+#hud-bottom-right {
+  position: absolute;
+  bottom: 24px;
+  right: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.reload-prompt {
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: rgba(185, 28, 28, 0.65);
+  border: 1px solid rgba(252, 165, 165, 0.5);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fee2e2;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  transition: opacity 0.15s ease;
+}
+
+.weapon-panel {
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  text-align: right;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+.weapon-name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: rgba(226, 232, 240, 0.85);
+  margin-bottom: 2px;
+}
+
+.ammo-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  line-height: 1;
+}
+
+#ammo-mag {
+  font-size: 32px;
+  font-weight: 800;
+  color: #ffffff;
+  transition: color 0.15s ease;
+}
+
+#ammo-mag.low-ammo {
+  color: #fca5a5;
+}
+
+.ammo-sep {
+  font-size: 18px;
+  color: rgba(203, 213, 225, 0.6);
+}
+
+#ammo-reserve {
+  font-size: 18px;
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.82);
+}
+
+/* Start / Pause Overlay */
+#overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 19, 32, 0.42);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+
+#overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.overlay-card {
+  width: 100%;
+  max-width: 460px;
+  padding: 34px 32px 30px;
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.overlay-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: #38bdf8;
+  margin-bottom: 6px;
+}
+
+.overlay-title {
+  margin: 0;
+  font-size: 46px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  line-height: 1.05;
+  color: #ffffff;
+}
+
+.overlay-subtitle {
+  margin: 10px 0 24px;
+  font-size: 14px;
+  color: rgba(226, 232, 240, 0.82);
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 9px 14px;
+  margin-bottom: 26px;
+  text-align: left;
+}
+
+.control-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  color: rgba(241, 245, 249, 0.9);
+}
+
+.control-item kbd {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #f8fafc;
+  white-space: nowrap;
+}
+
+#play-btn {
+  width: 100%;
+  padding: 14px 24px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(2, 132, 199, 0.38);
+  transition: transform 0.12s ease, filter 0.15s ease;
+}
+
+#play-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+#play-btn:active {
+  transform: translateY(1px);
+}
