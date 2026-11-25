@@ -19,6 +19,13 @@ export interface PlayerStatus {
   surface: SurfaceType;
 }
 
+export interface PlayerHealth {
+  current: number;
+  max: number;
+  isDead: boolean;
+  damageFlash: number;
+}
+
 export class PlayerController {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly colliders: Collider[];
@@ -28,6 +35,14 @@ export class PlayerController {
   private readonly playerRadius = 0.45;
   private readonly gravity = -18.5;
   private readonly jumpSpeed = 6.8;
+
+  private readonly maxHealth = 100;
+  private health = 100;
+  private isDead = false;
+  private damageFlash = 0;
+  private regenCooldown = 0;
+  private damageRoll = 0;
+  private damagePitch = 0;
 
   private readonly position = new THREE.Vector3();
   private verticalVel = 0;
@@ -88,9 +103,67 @@ export class PlayerController {
     this.syncCamera();
   }
 
+  getPosition(): THREE.Vector3 {
+    return this.position.clone();
+  }
+
+  getHealth(): PlayerHealth {
+    return {
+      current: Math.ceil(this.health),
+      max: this.maxHealth,
+      isDead: this.isDead,
+      damageFlash: this.damageFlash,
+    };
+  }
+
+  takeDamage(amount: number): boolean {
+    if (this.isDead || amount <= 0) return this.isDead;
+    this.health = Math.max(0, this.health - amount);
+    this.damageFlash = 1;
+    this.regenCooldown = 6.0;
+    this.damageRoll = (Math.random() > 0.5 ? 1 : -1) * 0.055;
+    this.damagePitch = 0.035;
+    this.audio.playPlayerHurt();
+
+    if (this.health <= 0) {
+      this.health = 0;
+      this.isDead = true;
+      this.clearInputs();
+    }
+    return this.isDead;
+  }
+
+  heal(amount: number): void {
+    if (this.isDead || amount <= 0) return;
+    this.health = Math.min(this.maxHealth, this.health + amount);
+  }
+
+  reset(): void {
+    const spawnGroundY = getTerrainHeight(SPAWN_X, SPAWN_Z);
+    this.position.set(SPAWN_X, spawnGroundY + this.eyeHeight, SPAWN_Z);
+    this.verticalVel = 0;
+    this.isGrounded = true;
+    this.yaw = 0;
+    this.pitch = -0.05;
+    this.health = this.maxHealth;
+    this.isDead = false;
+    this.damageFlash = 0;
+    this.regenCooldown = 0;
+    this.damageRoll = 0;
+    this.damagePitch = 0;
+    this.stepDistance = 0;
+    this.clearInputs();
+    this.syncCamera();
+  }
+
   private syncCamera(): void {
     this.camera.position.copy(this.position);
-    this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
+    this.camera.rotation.set(
+      THREE.MathUtils.clamp(this.pitch + this.damagePitch, -1.48, 1.48),
+      this.yaw,
+      this.damageRoll,
+      'YXZ'
+    );
   }
 
   private isWalkable(x: number, z: number): boolean {
@@ -99,11 +172,24 @@ export class PlayerController {
   }
 
   update(dt: number, isPlaying: boolean, isAiming: boolean): PlayerStatus {
+    this.damageFlash = Math.max(0, this.damageFlash - dt * 2.4);
+    const flinchDecay = Math.min(1, dt * 10);
+    this.damageRoll = THREE.MathUtils.lerp(this.damageRoll, 0, flinchDecay);
+    this.damagePitch = THREE.MathUtils.lerp(this.damagePitch, 0, flinchDecay);
+
+    if (isPlaying && !this.isDead) {
+      if (this.regenCooldown > 0) {
+        this.regenCooldown = Math.max(0, this.regenCooldown - dt);
+      } else if (this.health < this.maxHealth) {
+        this.health = Math.min(this.maxHealth, this.health + 5 * dt);
+      }
+    }
+
     const curGroundY = getTerrainHeight(this.position.x, this.position.z);
     const inWater = curGroundY < WATER_LEVEL;
     const surface = getSurfaceType(this.position.x, this.position.z);
 
-    if (!isPlaying) {
+    if (!isPlaying || this.isDead) {
       this.syncCamera();
       return { speedRatio: 0, isSprinting: false, isGrounded: this.isGrounded, inWater, surface };
     }
@@ -195,10 +281,8 @@ export class PlayerController {
       }
     }
 
-    // Sync camera rotation (preserving any weapon recoil pitch/yaw applied last frame? No,
-    // handleMouseLook updates yaw/pitch; sync camera position & read back subtle recoil if needed)
-    this.camera.position.copy(this.position);
-    this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
+    // Sync camera position & look rotation including damage flinch
+    this.syncCamera();
 
     return {
       speedRatio,

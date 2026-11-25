@@ -212,6 +212,109 @@ export class SoundEngine {
     }
   }
 
+  /** Distance-attenuated lower-pitched rifle crack for enemy gunfire. */
+  playEnemyShot(distance: number): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const attenuation = Math.max(0.05, 1 / (1 + Math.max(0, distance) * 0.08));
+    const now = this.ctx.currentTime;
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(2200, now);
+    filter.frequency.exponentialRampToValueAtTime(260, now + 0.14);
+
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.36 * attenuation, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    noise.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(this.masterGain);
+    noise.start(now, Math.random() * 0.5, 0.16);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(140, now);
+    osc.frequency.exponentialRampToValueAtTime(38, now + 0.085);
+
+    const oscGain = this.ctx.createGain();
+    oscGain.gain.setValueAtTime(0.32 * attenuation, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+
+    osc.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.095);
+  }
+
+  /** Impact thump + muffled burst when the player takes damage. */
+  playPlayerHurt(): void {
+    if (!this.ctx || !this.masterGain || !this.noiseBuffer) return;
+    const now = this.ctx.currentTime;
+
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(135, now);
+    osc.frequency.exponentialRampToValueAtTime(42, now + 0.14);
+
+    const oscGain = this.ctx.createGain();
+    oscGain.gain.setValueAtTime(0.45, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+
+    osc.connect(oscGain);
+    oscGain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.16);
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = this.noiseBuffer;
+
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(550, now);
+
+    const nGain = this.ctx.createGain();
+    nGain.gain.setValueAtTime(0.28, now);
+    nGain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+
+    noise.connect(lp);
+    lp.connect(nGain);
+    nGain.connect(this.masterGain);
+    noise.start(now, Math.random() * 0.5, 0.13);
+  }
+
+  /** Crisp metallic dink for headshots. */
+  playHeadshot(): void {
+    if (!this.ctx || !this.masterGain) return;
+    const now = this.ctx.currentTime;
+
+    const osc1 = this.ctx.createOscillator();
+    osc1.type = 'triangle';
+    osc1.frequency.setValueAtTime(1550, now);
+    osc1.frequency.exponentialRampToValueAtTime(980, now + 0.09);
+
+    const osc2 = this.ctx.createOscillator();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(2350, now);
+    osc2.frequency.exponentialRampToValueAtTime(1750, now + 0.075);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.28, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+
+    osc1.connect(gain);
+    osc2.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc1.start(now);
+    osc2.start(now);
+    osc1.stop(now + 0.12);
+    osc2.stop(now + 0.12);
+  }
+
   /** Gentle looping ocean surf ambience modulated by a slow LFO. */
   startAmbience(): void {
     if (!this.ctx || !this.masterGain || !this.noiseBuffer || this.ambienceStarted) return;

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SoundEngine } from './audio';
+import { EnemySystem } from './enemies';
 import { TargetsSystem } from './targets';
 
 export interface WeaponState {
@@ -14,6 +15,7 @@ export interface ShotOutcome {
   fired: boolean;
   hitTarget: boolean;
   targetDestroyed: boolean;
+  headshot: boolean;
   pitchKick: number;
   yawKick: number;
 }
@@ -42,6 +44,7 @@ export class WeaponSystem {
   private readonly worldScene: THREE.Scene;
   private readonly audio: SoundEngine;
   private readonly targets: TargetsSystem;
+  private readonly enemies: EnemySystem;
   private readonly environmentObjects: THREE.Object3D[];
 
   private readonly root = new THREE.Group();
@@ -104,12 +107,14 @@ export class WeaponSystem {
     worldScene: THREE.Scene,
     audio: SoundEngine,
     targets: TargetsSystem,
+    enemies: EnemySystem,
     environmentObjects: THREE.Object3D[]
   ) {
     this.camera = camera;
     this.worldScene = worldScene;
     this.audio = audio;
     this.targets = targets;
+    this.enemies = enemies;
     this.environmentObjects = environmentObjects;
 
     this.buildViewmodel();
@@ -347,6 +352,45 @@ export class WeaponSystem {
     this.reserve = 120;
   }
 
+  reset(): void {
+    this.mag = this.magSize;
+    this.reserve = 120;
+    this.fireCooldown = 0;
+    this.emptyClickCooldown = 0;
+    this.isFiringHeld = false;
+    this.pendingTrigger = false;
+    this.isAiming = false;
+    this.isReloading = false;
+    this.reloadTimer = 0;
+    this.adsBlend = 0;
+    this.recoilZ = 0;
+    this.recoilPitch = 0;
+    this.recoilYaw = 0;
+    this.swayX = 0;
+    this.swayY = 0;
+    this.muzzleFlashTimer = 0;
+    this.muzzleFlashGroup.visible = false;
+    this.muzzleLight.intensity = 0;
+    this.magGroup.position.y = -0.025;
+    this.camera.fov = this.baseFov;
+    this.camera.updateProjectionMatrix();
+
+    while (this.tracers.length > 0) {
+      const tr = this.tracers.pop()!;
+      this.worldScene.remove(tr.line);
+      tr.line.geometry.dispose();
+      (tr.line.material as THREE.Material).dispose();
+    }
+    while (this.casings.length > 0) {
+      const c = this.casings.pop()!;
+      this.worldScene.remove(c.mesh);
+    }
+    while (this.sparks.length > 0) {
+      const s = this.sparks.pop()!;
+      this.worldScene.remove(s.mesh);
+    }
+  }
+
   addMouseSway(dx: number, dy: number): void {
     const limit = 0.035;
     this.swayX = THREE.MathUtils.clamp(this.swayX - dx * 0.00018, -limit, limit);
@@ -372,7 +416,14 @@ export class WeaponSystem {
           this.startReload();
         }
       }
-      return { fired: false, hitTarget: false, targetDestroyed: false, pitchKick: 0, yawKick: 0 };
+      return {
+        fired: false,
+        hitTarget: false,
+        targetDestroyed: false,
+        headshot: false,
+        pitchKick: 0,
+        yawKick: 0,
+      };
     }
 
     this.mag--;
@@ -399,7 +450,11 @@ export class WeaponSystem {
 
     // Hitscan raycast from exact screen center
     this.raycaster.setFromCamera(this.screenCenter, this.camera);
-    const allTargets = [...this.targets.shootableObjects, ...this.environmentObjects];
+    const allTargets = [
+      ...this.enemies.shootableObjects,
+      ...this.targets.shootableObjects,
+      ...this.environmentObjects,
+    ];
     const hits = this.raycaster.intersectObjects(allTargets, true);
 
     const muzzleWorld = new THREE.Vector3();
@@ -408,19 +463,40 @@ export class WeaponSystem {
     let hitPoint: THREE.Vector3;
     let hitTarget = false;
     let targetDestroyed = false;
+    let headshot = false;
 
     if (hits.length > 0) {
       const first = hits[0];
       hitPoint = first.point.clone();
 
-      const res = this.targets.hitTarget(first.object, hitPoint, first.face?.normal);
-      if (res.hit) {
-        hitTarget = true;
-        targetDestroyed = res.destroyed;
-        this.audio.playHit(res.destroyed);
-        this.spawnImpactParticles(hitPoint, first.face?.normal, 0xdeb887, 7);
+      if (first.object.userData.enemyId !== undefined) {
+        const res = this.enemies.hitEnemy(first.object, hitPoint);
+        if (res.hit) {
+          hitTarget = true;
+          targetDestroyed = res.killed;
+          headshot = res.headshot;
+          if (res.headshot) {
+            this.audio.playHeadshot();
+          } else {
+            this.audio.playHit(res.killed);
+          }
+          this.spawnImpactParticles(
+            hitPoint,
+            first.face?.normal,
+            res.headshot ? 0xfacc15 : 0xff4444,
+            res.headshot ? 10 : 7
+          );
+        }
       } else {
-        this.spawnImpactParticles(hitPoint, first.face?.normal, 0xe7d39f, 5);
+        const res = this.targets.hitTarget(first.object, hitPoint, first.face?.normal);
+        if (res.hit) {
+          hitTarget = true;
+          targetDestroyed = res.destroyed;
+          this.audio.playHit(res.destroyed);
+          this.spawnImpactParticles(hitPoint, first.face?.normal, 0xdeb887, 7);
+        } else {
+          this.spawnImpactParticles(hitPoint, first.face?.normal, 0xe7d39f, 5);
+        }
       }
     } else {
       const dir = new THREE.Vector3();
@@ -429,7 +505,7 @@ export class WeaponSystem {
     }
 
     this.spawnTracer(muzzleWorld, hitPoint);
-    return { fired: true, hitTarget, targetDestroyed, pitchKick, yawKick };
+    return { fired: true, hitTarget, targetDestroyed, headshot, pitchKick, yawKick };
   }
 
   private spawnTracer(start: THREE.Vector3, end: THREE.Vector3): void {
@@ -537,6 +613,7 @@ export class WeaponSystem {
       fired: false,
       hitTarget: false,
       targetDestroyed: false,
+      headshot: false,
       pitchKick: 0,
       yawKick: 0,
     };

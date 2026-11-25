@@ -10,11 +10,27 @@
     <div id="app">
       <div id="canvas-container"></div>
 
+      <div id="damage-vignette" aria-hidden="true"></div>
+
       <div id="hud" aria-hidden="true">
         <div id="hud-top-left">
-          <div class="hud-badge">
-            <span class="hud-label">ALVOS</span>
-            <span id="target-counter">0 / 12</span>
+          <div class="hud-stats-row">
+            <div class="hud-badge">
+              <span class="hud-label">ONDA</span>
+              <span id="wave-counter">1</span>
+            </div>
+            <div class="hud-badge">
+              <span class="hud-label">INIMIGOS</span>
+              <span id="enemy-counter">5</span>
+            </div>
+            <div class="hud-badge">
+              <span class="hud-label">ABATES</span>
+              <span id="kill-counter">0</span>
+            </div>
+            <div class="hud-badge">
+              <span class="hud-label">ALVOS</span>
+              <span id="target-counter">0 / 12</span>
+            </div>
           </div>
           <div id="status-indicator" class="status-pill hidden"></div>
         </div>
@@ -34,6 +50,18 @@
           <span class="hm-line hm-tr"></span>
           <span class="hm-line hm-bl"></span>
           <span class="hm-line hm-br"></span>
+        </div>
+
+        <div id="hud-bottom-left">
+          <div class="health-panel">
+            <div class="health-header">
+              <span class="health-label">VIDA</span>
+              <span id="health-value">100</span>
+            </div>
+            <div id="health-bar-track">
+              <div id="health-bar-fill"></div>
+            </div>
+          </div>
         </div>
 
         <div id="hud-bottom-right">
@@ -67,6 +95,27 @@
           </div>
 
           <button id="play-btn" type="button">JOGAR</button>
+        </div>
+      </div>
+
+      <div id="gameover-overlay">
+        <div class="overlay-card gameover-card">
+          <div class="overlay-eyebrow gameover-eyebrow">COMBATE ENCERRADO</div>
+          <h2 class="overlay-title gameover-title">VOCÊ MORREU</h2>
+          <p class="overlay-subtitle">Os hostis dominaram a ilha.</p>
+
+          <div class="gameover-stats">
+            <div class="gameover-stat">
+              <span class="stat-label">ONDA ALCANÇADA</span>
+              <span id="gameover-wave" class="stat-value">1</span>
+            </div>
+            <div class="gameover-stat">
+              <span class="stat-label">ABATES TOTAIS</span>
+              <span id="gameover-kills" class="stat-value">0</span>
+            </div>
+          </div>
+
+          <button id="restart-btn" type="button">TENTAR NOVAMENTE</button>
         </div>
       </div>
     </div>
